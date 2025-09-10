@@ -1,7 +1,6 @@
 # GoLlama
 This repository contains the project developed in Go for the course Advanced Software Paradigms (CSCI 6221).
 
-
 ## Project Goals
 1. Build a working implementation of llama cpp but for the Golang library.
 2. Benchmarking: Compare inference time of GoLlama vs. Llama cpp
