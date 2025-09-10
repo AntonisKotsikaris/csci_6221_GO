@@ -25,6 +25,13 @@ gollama/
 └── models/                      # Model files saved from huggingface etc.
 ```
 
+### Go Packages
+Some Go packages we'll use to help complete the project faster (don't re-invent the wheel!).:
+1. Gorgonia ([link](https://gorgonia.org/)). 
+   This tool will help us do Deep Learning in Go (differentiation, ReLU, etc.)
+2. GoNum ([link](https://www.gonum.org/)) Like NumPy but for Go :) linear algebra etc.
+3. Some CLI package to interact more easily with GoLlama?
+4. Etc.
 ## Team Responsibilities
 
 ### Team Member 1: Model Architecture - ???
