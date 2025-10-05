@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 )
 
@@ -52,6 +53,7 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var chatReq ChatRequest
+	//passing ADDRESS of chatReq here so that Decode can operate on it.
 	err := json.NewDecoder(r.Body).Decode(&chatReq)
 	if err != nil {
 		http.Error(w, "Bad request", http.StatusBadRequest)
@@ -85,7 +87,7 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 	defer func(Body io.ReadCloser) {
 		err := Body.Close()
 		if err != nil {
-
+			log.Printf("Error closing response body: %v", err)
 		}
 	}(resp.Body)
 
