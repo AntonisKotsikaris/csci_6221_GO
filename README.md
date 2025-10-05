@@ -33,25 +33,25 @@ Some Go packages we'll use to help complete the project faster (don't re-invent 
 4. Etc.
 ## Team Responsibilities
 
-### Team Member 1: Model Architecture - ???
+### Team Member 1: Model Architecture - Kirtan
 - Model structure definitions
 - Weight loading implementation (turning huggingface into proper file types for Go)
 
-### Team Member 2: Inference Engine - ???
+### Team Member 2: Inference Engine - Dan
 - Forward pass logic
 - Optimization (Go Concurrency etc.)
 
-### Team Member 3: Math & Data Structures - ???
+### Team Member 3: Math & Data Structures - Ritvik
 - Custom data structure wrappers around Gorgonia
 - Utility math functions (tensor, ReLU, Softmax, etc.)
 - Performance optimization
 
-### Team Member 4: Text Processing - ???
+### Team Member 4: Text Processing - Tony
 - Tokenization
 - Named Entity Recognition (NER)
 - Text preprocessing and postprocessing
 
-### Team Member 5: Integration & DevOps - ???
+### Team Member 5: Integration & DevOps - Hetel
 - CLI (implement Ollama or custom)
 - Testing (gofmt, go vet, golangci-lint etc.)
 - Documentation and deployment
