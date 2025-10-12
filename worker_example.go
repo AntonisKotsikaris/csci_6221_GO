@@ -8,12 +8,29 @@ import (
 type Request struct {
 	ID      string
 	Message string
-	ReplyCh chan string // Channel to send response back
+	ReplyCh chan string
 }
 
-// 2. Worker processes requests from a queue
-func worker(id int, jobs <-chan Request) {
-	for req := range jobs {
+type WorkerPool struct {
+	jobs       chan Request
+	numWorkers int
+}
+
+func NewWorkerPool(numWorkers int, queueSize int) *WorkerPool {
+	return &WorkerPool{
+		jobs:       make(chan Request, queueSize),
+		numWorkers: numWorkers,
+	}
+}
+
+func (wp *WorkerPool) Start() {
+	for i := 1; i <= wp.numWorkers; i++ {
+		go wp.worker(i)
+	}
+}
+
+func (wp *WorkerPool) worker(id int) {
+	for req := range wp.jobs {
 		fmt.Printf("[%s] Worker %d processing: %s\n", time.Now().Format("15:04:05"), id, req.ID)
 		time.Sleep(2 * time.Second)
 		result := fmt.Sprintf("Response to: %s", req.Message)
@@ -21,17 +38,15 @@ func worker(id int, jobs <-chan Request) {
 	}
 }
 
+func (wp *WorkerPool) Submit(req Request) {
+	wp.jobs <- req
+}
+
 func main() {
 	fmt.Printf("Start time: [%s]\n", time.Now().Format("15:04:05"))
-	jobs := make(chan Request, 10)
 
-	// we need to convert this into a POOL of workers - instead of being a local function, it's a pool of
-	//llama.cpp backend instances
-	go worker(1, jobs)
-	go worker(2, jobs)
-	go worker(3, jobs)
-	go worker(4, jobs)
-	go worker(5, jobs)
+	pool := NewWorkerPool(3, 10)
+	pool.Start()
 
 	replyChannels := make([]chan string, 3)
 
@@ -44,7 +59,7 @@ func main() {
 			ReplyCh: replyChannels[i],
 		}
 
-		jobs <- req
+		pool.Submit(req)
 	}
 
 	for i := 0; i < 3; i++ {

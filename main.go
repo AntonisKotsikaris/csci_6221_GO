@@ -55,6 +55,7 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 	var chatReq ChatRequest
 	//passing ADDRESS of chatReq here so that Decode can operate on it.
 	err := json.NewDecoder(r.Body).Decode(&chatReq)
+	//A ton of if err ! nul {} handlers. That seems to be life in Go.
 	if err != nil {
 		http.Error(w, "Bad request", http.StatusBadRequest)
 		return
