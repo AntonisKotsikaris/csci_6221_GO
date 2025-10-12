@@ -1,57 +1,133 @@
 # GoLlama
 This repository contains the project developed in Go for the course Advanced Software Paradigms (CSCI 6221).
 
-## Project Goals
-1. Build a working implementation of llama cpp but for the Golang library.
-2. Benchmarking: Compare inference time of GoLlama vs. Llama cpp
-3. Integration testing
-4. Code review and quality metrics
+## Quick Start
 
-## High-level Architecture & Structure
+### Prerequisites
 
-Input Text → Tokenizer → Model → Inference → Output Text
+- Go 1.25 installed
+- Git
+- (Mac) Xcode Command Line Tools
+- (Mac) Homebrew
+- (Windows) Visual Studio with C++ support or MinGW
 
-The directory is structured as follows:
+### Setup Instructions
+
+#### 1. Install Build Tools
+
+**macOS:**
+```bash
+# Install Xcode Command Line Tools
+xcode-select --install
+
+# Install cmake
+brew install cmake
 ```
-gollama/
-├── cmd/gollama/main.go          # CLI application
-├── pkg/
-│   ├── model/                   # Model loading & architecture - team member 1
-│   ├── inference/               # Forward pass & text generation (using math package) - team member 2
-│   ├── math/                    # Linear algebra wrappers - team member 3
-│   ├── tokenizer/               # Text processing & NER - team member 4
-│   └── api/                     # CLI & Ollama integration - team member 5
-└── models/                      # Model files saved from huggingface etc.
+
+**Windows:**
+```bash
+# Using Chocolatey
+choco install cmake git
+
+# Or download CMake from: https://cmake.org/download/
+# And Git from: https://git-scm.com/downloads/win
 ```
 
-### Go Packages
-Some Go packages we'll use to help complete the project faster (don't re-invent the wheel!).:
-1. Gorgonia ([link](https://gorgonia.org/)). 
-   This tool will help us do Deep Learning in Go (differentiation, ReLU, etc.)
-2. GoNum ([link](https://www.gonum.org/)) Like NumPy but for Go :) linear algebra etc.
-3. Some CLI package to interact more easily with GoLlama?
-4. Etc.
-## Team Responsibilities
+#### 2. Clone and Build llama.cpp
 
-### Team Member 1: Model Architecture - Kirtan
-- Model structure definitions
-- Weight loading implementation (turning huggingface into proper file types for Go)
+```bash
+# Clone llama.cpp
+git clone https://github.com/ggml-org/llama.cpp
+cd llama.cpp
 
-### Team Member 2: Inference Engine - Dan
-- Forward pass logic
-- Optimization (Go Concurrency etc.)
+# Build it
+cmake -B build
+cmake --build build --config Release
+```
 
-### Team Member 3: Math & Data Structures - Ritvik
-- Custom data structure wrappers around Gorgonia
-- Utility math functions (tensor, ReLU, Softmax, etc.)
-- Performance optimization
+**Note for Mac:** Metal GPU acceleration is enabled by default  
+**Note for Windows:** This builds CPU version. For GPU, see [llama.cpp docs](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md)
 
-### Team Member 4: Text Processing - Tony
-- Tokenization
-- Named Entity Recognition (NER)
-- Text preprocessing and postprocessing
+#### 3. Download a Model
 
-### Team Member 5: Integration & DevOps - Hetel
-- CLI (implement Ollama or custom)
-- Testing (gofmt, go vet, golangci-lint etc.)
-- Documentation and deployment
+Create a models directory and download a small model for testing:
+
+```bash
+# Create models directory
+mkdir -p models
+cd models
+
+# Download Qwen 0.5B (small, ~300MB, good for testing)
+curl -L -o qwen-0.5b.Q4_K_M.gguf https://huggingface.co/Qwen/Qwen2-0.5B-Instruct-GGUF/resolve/main/qwen2-0_5b-instruct-q4_k_m.gguf
+
+# OR download TinyLlama 1.1B (~900MB)
+curl -L -o tinyllama-1.1b.Q4_K_M.gguf https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
+
+# Return to llama.cpp directory
+cd ..
+```
+
+#### 4. Start llama.cpp Server
+
+```bash
+# From llama.cpp directory
+./build/bin/llama-server -m ./models/qwen-0.5b.Q4_K_M.gguf --host 0.0.0.0 --port 8080
+```
+
+You should see:
+```
+llama server listening at http://0.0.0.0:8080
+```
+
+#### 5. Test llama.cpp is Working
+
+Open a new terminal and test:
+
+```bash
+# Check health
+curl http://localhost:8080/health
+
+# Test completion
+curl http://localhost:8080/v1/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "What is 2+2?",
+    "max_tokens": 50
+  }'
+```
+
+Or open your browser to: `http://localhost:8080`
+
+#### 6. Clone and Run Gollama
+
+```bash
+# Clone this repo
+git clone https://github.com/AntonisKotsikaris/csci_6221_GO.git
+cd csci_6221_GO
+
+# Run the server
+go run main.go
+```
+
+The Gollama server should start on `http://localhost:9000`
+
+#### 7. Test the Gollama API
+
+Using curl:
+```bash
+curl -X POST http://localhost:9000/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "Tell me a joke"
+  }'
+```
+
+Or use Insomnia/Postman:
+- **URL:** `POST http://localhost:9000/chat`
+- **Headers:** `Content-Type: application/json`
+- **Body:**
+  ```json
+  {
+    "message": "Hello!"
+  }
+  ```
