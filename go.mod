@@ -1,0 +1,3 @@
+module gollama
+
+go 1.25

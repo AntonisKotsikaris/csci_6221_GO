@@ -1,6 +1,10 @@
 # GoLlama
 This repository contains the project developed in Go for the course Advanced Software Paradigms (CSCI 6221).
 
+GoLlama is an open-source API that can be used in a hub-and-spoke configuration with llama.cpp instances. The client repository is located [here](). 
+This allows distributed inference across many machines, all routed back to the GoLlama hub. See below for an illustration of this setup. In this way, communities can self-sustain model inference without relying on large LLM providers and paywalls.
+![Fig 1. GoLlama Architecture.](docs/gollama-arch.png)
+
 ## Quick Start
 
 ### Prerequisites
