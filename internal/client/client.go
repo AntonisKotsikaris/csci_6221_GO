@@ -7,6 +7,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+
+	auth "gollama/internal/auth"
 )
 
 var clientPort int
@@ -34,14 +36,20 @@ func (c *Client) Start() error {
 }
 
 func (c *Client) Setup() {
-	// Register handlers
+	// Register auth handlers
+	auth.Setup()
+
+	// Register protected handlers with auth middleware
 	http.HandleFunc("/health", handleHealth)
 	http.HandleFunc("/connect", handleConnectToServer)
 	http.HandleFunc("/execute", handleExecute)
 
 	log.Printf("GoLlama client running on http://localhost:%d", c.port)
+	log.Printf("  GET /login - Login page")
+	log.Printf("  GET /signup - Signup page")
 	log.Printf("  GET /health - Check client health")
-	log.Printf("  GET /connect - Connect to server")
+	log.Printf("  GET /connect - Connect to server (protected)")
+	log.Printf("  POST /execute - Execute commands (protected)")
 }
 
 func handleHealth(writer http.ResponseWriter, request *http.Request) {
@@ -88,7 +96,7 @@ func handleConnectToServer(writer http.ResponseWriter, request *http.Request) {
 
 	// post to server
 	serverResp, err := http.Post(
-		"http://localhost:9000/connectWorker",
+		"https://jaquelyn-cuneal-undepressively.ngrok-free.dev/connectWorker",
 		"application/json",
 		bytes.NewReader(payload),
 	)
@@ -107,6 +115,8 @@ func handleConnectToServer(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(http.StatusOK)
 	io.Copy(writer, serverResp.Body)
+
+	log.Printf("Successfully connected to server")
 }
 
 func handleExecute(writer http.ResponseWriter, request *http.Request) {
