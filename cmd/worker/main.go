@@ -3,18 +3,18 @@ package main
 import (
 	"flag"
 	"fmt"
-	"gollama/internal/client"
+	"gollama/internal/worker"
 	"log"
 	"net/http"
 )
 
 func main() {
-	port := flag.Int("port", 9001, "Port number for the client to run on")
+	port := flag.Int("port", 9001, "Port number for the worker to run on")
 	llamaPort := flag.Int("llama-port", 8080, "Port number for the llama.cpp instance")
 	flag.Parse()
 
-	//initialize and setup the client
-	c := client.New(*port)
+	//initialize and setup the worker
+	c := worker.New(*port)
 	c.Setup(*llamaPort)
 
 	// Auto-connect to server

@@ -14,7 +14,7 @@ func HandleHealth(p *pool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		response := map[string]interface{}{
-			"status":  "healthy",
+			"status":  http.StatusOK,
 			"workers": p.GetWorkerCount(),
 		}
 		_ = json.NewEncoder(w).Encode(response)

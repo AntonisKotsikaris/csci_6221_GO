@@ -232,7 +232,7 @@ func (p *Pool) GetWorkerURL() string {
 		basically just keep getting the next worker, reset back to first worker when all workers have been handled.
 		TODO: Get a list of IDLE workers. Then from there, follow round-robin. But prioritize idle workers.
 			Probably lots of clever ways to handle distributing worker load.
-			But this implies the client needs to maintain some kind of state - idle / not idle etc.
+			But this implies the worker needs to maintain some kind of state - idle / not idle etc.
 	*/
 	// Reset nextIdx if it's out of bounds (happens when workers are removed)
 	if p.nextIdx >= len(p.workerOrder) {

@@ -31,7 +31,6 @@ func HandleChat(p *pool.Pool) http.HandlerFunc {
 
 		log.Printf("Received message: %s", chatReq.Message)
 
-		//create a new llama request to be passed into the worker job.
 		llamaReq := internal.LlamaRequest{
 			Messages: []internal.Message{
 				{Role: "user", Content: chatReq.Message},
@@ -39,7 +38,6 @@ func HandleChat(p *pool.Pool) http.HandlerFunc {
 			MaxTokens: 100,
 		}
 
-		// a reply channel is passed into the worker job
 		replyCh := make(chan string)
 
 		job := internal.WorkerJob{

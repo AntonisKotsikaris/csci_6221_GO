@@ -1,4 +1,4 @@
-package client
+package worker
 
 import (
 	"bytes"
@@ -13,13 +13,13 @@ var clientPort int
 var llamaPort int
 
 /*
-Client manages the HTTP client that connects to llama.cpp
+Client manages the HTTP worker that connects to llama.cpp
 */
 type Client struct {
 	port int
 }
 
-// New initializes the client object
+// New initializes the worker object
 func New(port int) *Client {
 	clientPort = port // Store in package variable
 	return &Client{
@@ -28,7 +28,7 @@ func New(port int) *Client {
 }
 
 /*
-Start to run the client.
+Start to run the worker.
 */
 func (c *Client) Start() error {
 	return http.ListenAndServe(fmt.Sprintf(":%d", c.port), nil)
@@ -42,9 +42,9 @@ func (c *Client) Setup(llamaPortArg int) {
 	http.HandleFunc("/connect", handleConnectToServer)
 	http.HandleFunc("/execute", handleExecute)
 
-	log.Printf("GoLlama client running on http://localhost:%d", c.port)
+	log.Printf("GoLlama worker running on http://localhost:%d", c.port)
 	log.Printf("Connecting to llama.cpp on port %d", llamaPort)
-	log.Printf("  GET /health - Check client health")
+	log.Printf("  GET /health - Check worker health")
 	log.Printf("  GET /connect - Connect to server")
 }
 
@@ -71,7 +71,7 @@ func handleHealth(writer http.ResponseWriter, request *http.Request) {
 func handleConnectToServer(writer http.ResponseWriter, request *http.Request) {
 	resp, err := http.Get(fmt.Sprintf("http://localhost:%d/health", clientPort))
 	if err != nil || resp.StatusCode != http.StatusOK {
-		http.Error(writer, "Cannot register: client unhealthy", http.StatusServiceUnavailable)
+		http.Error(writer, "Cannot register: worker unhealthy", http.StatusServiceUnavailable)
 		return
 	}
 	defer resp.Body.Close()
@@ -116,7 +116,7 @@ func handleConnectToServer(writer http.ResponseWriter, request *http.Request) {
 func handleExecute(writer http.ResponseWriter, request *http.Request) {
 	//basically just pass the request from the server into llama.cpp. So we don't handle endpoint names etc.
 	//That's all done in the server. This should just pass the request from the server into llama.cpp using
-	//this client as the middle-man.
+	//this worker as the middle-man.
 	var executeReq struct {
 		Endpoint string          `json:"endpoint"`
 		Body     json.RawMessage `json:"body"`
@@ -151,6 +151,7 @@ func handleExecute(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	log.Printf("Executed task at endpoint: %s", executeReq.Endpoint)
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(resp.StatusCode)
 	writer.Write(body)
