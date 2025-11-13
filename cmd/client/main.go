@@ -8,7 +8,7 @@ import (
 func main() {
 
 	//initialize and setup the client
-	c := client.New(9004)
+	c := client.New(9001)
 	c.Setup()
 
 	//run

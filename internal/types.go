@@ -1,5 +1,7 @@
 package internal
 
+import "time"
+
 /*
 Message represents a single message in the conversation
 */
@@ -76,6 +78,16 @@ type LlamaResponse struct {
 		} `json:"message"`
 	} `json:"choices"`
 	Error string `json:"error,omitempty"`
+}
+
+/*
+WorkerStats tracks performance metrics for a worker
+*/
+type WorkerStats struct {
+	URL           string    `json:"url"`
+	JobsCompleted int       `json:"jobs_completed"`
+	JobsFailed    int       `json:"jobs_failed"`
+	StartTime     time.Time `json:"start_time"`
 }
 
 /*
