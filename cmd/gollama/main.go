@@ -8,7 +8,7 @@ import (
 
 func main() {
 	//initialize and start the worker pool
-	p := pool.New(50)
+	p := pool.New(5000)
 	p.Start()
 
 	//initialize and setup the server with the created worker pool

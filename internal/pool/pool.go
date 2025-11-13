@@ -39,14 +39,17 @@ func New(queueSize int) *Pool {
 Start initializes the worker pool
 */
 func (p *Pool) Start() {
-	for i := 1; i <= 10; i++ { // 10 concurrent job processors
+	for i := 1; i <= 50; i++ { // 50 concurrent job processors
 		go p.jobProcessor(i)
 	}
-	log.Println("Worker pool initialized with 10 job processors")
+	log.Println("Worker pool initialized with 50 job processors")
 }
 
 /*
 jobProcessor handles jobs and manages worker health
+NOTE: Under high load, some requests may get "stuck in limbo" - they appear to hang
+while newer requests continue processing. This could be due to worker health check delays,
+channel/goroutine leaks, or mutex contention from heavy stats logging.
 */
 func (p *Pool) jobProcessor(id int) {
 	for job := range p.jobs {
@@ -231,6 +234,11 @@ func (p *Pool) GetWorkerURL() string {
 			Probably lots of clever ways to handle distributing worker load.
 			But this implies the client needs to maintain some kind of state - idle / not idle etc.
 	*/
+	// Reset nextIdx if it's out of bounds (happens when workers are removed)
+	if p.nextIdx >= len(p.workerOrder) {
+		p.nextIdx = 0
+	}
+
 	worker := p.workerOrder[p.nextIdx]
 	p.nextIdx = (p.nextIdx + 1) % len(p.workerOrder)
 
@@ -244,4 +252,18 @@ func (p *Pool) GetWorkerCount() int {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return len(p.workerOrder)
+}
+
+/*
+GetWorkerStats returns a copy of all worker statistics
+*/
+func (p *Pool) GetWorkerStats() map[string]internal.WorkerStats {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	stats := make(map[string]internal.WorkerStats)
+	for url, workerStats := range p.workerStats {
+		stats[url] = *workerStats
+	}
+	return stats
 }
