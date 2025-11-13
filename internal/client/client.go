@@ -10,6 +10,7 @@ import (
 )
 
 var clientPort int
+var llamaPort int
 
 /*
 Client manages the HTTP client that connects to llama.cpp
@@ -33,20 +34,23 @@ func (c *Client) Start() error {
 	return http.ListenAndServe(fmt.Sprintf(":%d", c.port), nil)
 }
 
-func (c *Client) Setup() {
+func (c *Client) Setup(llamaPortArg int) {
+	llamaPort = llamaPortArg // Store in package variable
+
 	// Register handlers
 	http.HandleFunc("/health", handleHealth)
 	http.HandleFunc("/connect", handleConnectToServer)
 	http.HandleFunc("/execute", handleExecute)
 
 	log.Printf("GoLlama client running on http://localhost:%d", c.port)
+	log.Printf("Connecting to llama.cpp on port %d", llamaPort)
 	log.Printf("  GET /health - Check client health")
 	log.Printf("  GET /connect - Connect to server")
 }
 
 func handleHealth(writer http.ResponseWriter, request *http.Request) {
-	// Ping llama.cpp instance (assuming it's on localhost:8080)
-	resp, err := http.Get("http://localhost:8080/health")
+	// Ping llama.cpp instance
+	resp, err := http.Get(fmt.Sprintf("http://localhost:%d/health", llamaPort))
 	if err != nil {
 		http.Error(writer, "llama.cpp unavailable", http.StatusServiceUnavailable)
 		return
@@ -131,7 +135,7 @@ func handleExecute(writer http.ResponseWriter, request *http.Request) {
 
 	//dynamically create the endpoint based on the request data from Gollama server
 	resp, err := http.Post(
-		fmt.Sprintf("http://localhost:8080%s", executeReq.Endpoint),
+		fmt.Sprintf("http://localhost:%d%s", llamaPort, executeReq.Endpoint),
 		"application/json",
 		bytes.NewReader(executeReq.Body),
 	)

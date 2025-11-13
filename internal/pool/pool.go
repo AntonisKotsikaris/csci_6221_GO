@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"gollama/internal"
 	"io"
 	"log"
 	"net/http"
 	"sync"
-
-	"gollama/internal"
+	"time"
 )
 
 /*
@@ -17,10 +17,11 @@ Pool holds the last-known pool of workers. Workers are verified, used, or discar
 jobProcessor.
 */
 type Pool struct {
-	jobs    chan internal.WorkerJob //job queue
-	workers []string                // available worker URLs
-	mu      sync.RWMutex            // Protects workers slice during concurrent calls
-	nextIdx int
+	jobs        chan internal.WorkerJob          //job queue
+	workerStats map[string]*internal.WorkerStats // worker stats by URL
+	workerOrder []string                         // ordered list of worker URLs for round-robin
+	mu          sync.RWMutex                     // Protects worker data during concurrent calls
+	nextIdx     int
 }
 
 /*
@@ -28,8 +29,9 @@ New creates a new worker pool
 */
 func New(queueSize int) *Pool {
 	return &Pool{
-		jobs:    make(chan internal.WorkerJob, queueSize),
-		workers: make([]string, 0),
+		jobs:        make(chan internal.WorkerJob, queueSize),
+		workerStats: make(map[string]*internal.WorkerStats),
+		workerOrder: make([]string, 0),
 	}
 }
 
@@ -37,14 +39,17 @@ func New(queueSize int) *Pool {
 Start initializes the worker pool
 */
 func (p *Pool) Start() {
-	for i := 1; i <= 10; i++ { // 10 concurrent job processors
+	for i := 1; i <= 50; i++ { // 50 concurrent job processors
 		go p.jobProcessor(i)
 	}
-	log.Println("Worker pool initialized with 10 job processors")
+	log.Println("Worker pool initialized with 50 job processors")
 }
 
 /*
 jobProcessor handles jobs and manages worker health
+NOTE: Under high load, some requests may get "stuck in limbo" - they appear to hang
+while newer requests continue processing. This could be due to worker health check delays,
+channel/goroutine leaks, or mutex contention from heavy stats logging.
 */
 func (p *Pool) jobProcessor(id int) {
 	for job := range p.jobs {
@@ -53,9 +58,12 @@ func (p *Pool) jobProcessor(id int) {
 		result := p.callWorker(job.WorkerURL, job.Request)
 
 		if isError(result) {
-			log.Printf("[Processor %d] Worker %s failed health check, removing from pool", id, job.WorkerURL)
+			log.Printf("[Processor %d] Worker %s failed, removing from pool", id, job.WorkerURL)
+			p.updateWorkerStats(job.WorkerURL, false)
 			p.RemoveWorker(job.WorkerURL)
 			//TODO: Now that the worker failed, re-run the job!!
+		} else {
+			p.updateWorkerStats(job.WorkerURL, true)
 		}
 
 		job.ReplyCh <- result
@@ -124,6 +132,29 @@ func (p *Pool) callWorker(workerURL string, req internal.LlamaRequest) string {
 }
 
 /*
+updateWorkerStats updates the statistics for a worker after job completion
+*/
+func (p *Pool) updateWorkerStats(url string, success bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	stats, exists := p.workerStats[url]
+	if !exists {
+		return // Worker not found, probably already removed
+	}
+
+	if success {
+		stats.JobsCompleted++
+		log.Printf("Worker %s completed job (total: %d, failed: %d, uptime: %s)",
+			url, stats.JobsCompleted, stats.JobsFailed, time.Since(stats.StartTime).Round(time.Second))
+	} else {
+		stats.JobsFailed++
+		log.Printf("Worker %s failed job (total: %d, failed: %d, uptime: %s)",
+			url, stats.JobsCompleted, stats.JobsFailed, time.Since(stats.StartTime).Round(time.Second))
+	}
+}
+
+/*
 isError checks if the result is an error message
 */
 func isError(result string) bool {
@@ -144,16 +175,22 @@ func (p *Pool) AddWorker(url string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// look for identical URL - for now that's our marker for a unique worker
-	for _, w := range p.workers {
-		if w == url {
-			log.Printf("Worker %s already registered", url)
-			return
-		}
+	// Check if worker already exists
+	if _, exists := p.workerStats[url]; exists {
+		log.Printf("Worker %s already registered", url)
+		return
 	}
 
-	p.workers = append(p.workers, url)
-	log.Printf("Added worker: %s (total workers: %d)", url, len(p.workers))
+	// Initialize worker stats
+	p.workerStats[url] = &internal.WorkerStats{
+		URL:           url,
+		JobsCompleted: 0,
+		JobsFailed:    0,
+		StartTime:     time.Now(),
+	}
+
+	p.workerOrder = append(p.workerOrder, url)
+	log.Printf("Added worker: %s (total workers: %d)", url, len(p.workerOrder))
 }
 
 /*
@@ -163,10 +200,18 @@ func (p *Pool) RemoveWorker(url string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	for i, w := range p.workers {
+	// Remove from stats map
+	if stats, exists := p.workerStats[url]; exists {
+		log.Printf("Removing worker: %s (completed: %d, failed: %d, uptime: %s)",
+			url, stats.JobsCompleted, stats.JobsFailed, time.Since(stats.StartTime).Round(time.Second))
+		delete(p.workerStats, url)
+	}
+
+	// Remove from order slice
+	for i, w := range p.workerOrder {
 		if w == url {
-			p.workers = append(p.workers[:i], p.workers[i+1:]...)
-			log.Printf("Removed worker: %s (total workers: %d)", url, len(p.workers))
+			p.workerOrder = append(p.workerOrder[:i], p.workerOrder[i+1:]...)
+			log.Printf("Worker %s removed (total workers: %d)", url, len(p.workerOrder))
 			return
 		}
 	}
@@ -179,7 +224,7 @@ func (p *Pool) GetWorkerURL() string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if len(p.workers) == 0 {
+	if len(p.workerOrder) == 0 {
 		return "" //error - no workers
 	}
 
@@ -189,8 +234,13 @@ func (p *Pool) GetWorkerURL() string {
 			Probably lots of clever ways to handle distributing worker load.
 			But this implies the client needs to maintain some kind of state - idle / not idle etc.
 	*/
-	worker := p.workers[p.nextIdx]
-	p.nextIdx = (p.nextIdx + 1) % len(p.workers)
+	// Reset nextIdx if it's out of bounds (happens when workers are removed)
+	if p.nextIdx >= len(p.workerOrder) {
+		p.nextIdx = 0
+	}
+
+	worker := p.workerOrder[p.nextIdx]
+	p.nextIdx = (p.nextIdx + 1) % len(p.workerOrder)
 
 	return worker
 }
@@ -201,5 +251,19 @@ GetWorkerCount returns the number of available workers
 func (p *Pool) GetWorkerCount() int {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return len(p.workers)
+	return len(p.workerOrder)
+}
+
+/*
+GetWorkerStats returns a copy of all worker statistics
+*/
+func (p *Pool) GetWorkerStats() map[string]internal.WorkerStats {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	stats := make(map[string]internal.WorkerStats)
+	for url, workerStats := range p.workerStats {
+		stats[url] = *workerStats
+	}
+	return stats
 }

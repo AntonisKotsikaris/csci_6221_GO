@@ -135,3 +135,17 @@ Or use Insomnia/Postman:
     "message": "Hello!"
   }
   ```
+  
+## Testing
+Under the tests/ folder we have several test scripts to test the performance of the system.
+```
+go run tests/loadtest.go -requests 1000 -concurrency 50 -message "Stress test message"
+```
+
+Adjust requests and concurrency depending on scale of test you need.
+
+## Client config
+You can choose what port to host the client on and what llama.cpp port it's connecting to with the flags `-port` and `llama-port`, respectively. By default the Gollama server starts on port 9000, so clients begin at port 9001. For example:
+```
+go run cmd/client/main.go -port 9001 -llama-port 8080
+```
