@@ -2,268 +2,321 @@ package pool
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
-	"fmt"
-	"gollama/internal"
-	"io"
-	"log"
+	"errors"
 	"net/http"
 	"sync"
 	"time"
 )
 
-/*
-Pool holds the last-known pool of workers. Workers are verified, used, or discarded as they're called upon by the
-jobProcessor.
-*/
-type Pool struct {
-	jobs        chan internal.WorkerJob          //job queue
-	workerStats map[string]*internal.WorkerStats // worker stats by URL
-	workerOrder []string                         // ordered list of worker URLs for round-robin
-	mu          sync.RWMutex                     // Protects worker data during concurrent calls
-	nextIdx     int
+type Status_W string
+
+const (
+	StatusUnknown   Status_W = "unknown"
+	StatusHealthy   Status_W = "healthy"
+	StatusUnhealthy Status_W = "unhealthy"
+)
+
+// structure of worker
+type Worker struct {
+	URL           string    `json:"url"`
+	Model         string    `json:"model"`
+	Status        Status_W  `json:"status"`
+	Busy          bool      `json:"busy"`
+	LastHeartbeat time.Time `json:"lastHeartbeat"`
+
+	FailedPings   int    `json:"-"`
+	TotalJobs     int    `json:"totalJobs"`
+	TotalFailures int    `json:"totalFailures"`
+	LastError     string `json:"lastError"`
 }
 
-/*
-New creates a new worker pool
-*/
+// units of work to be executed
+type Job_W struct {
+	Endpoint     string
+	Body         any
+	ResponseChan chan []byte
+	ErrorChan    chan error
+	Ctx          context.Context
+}
+
+// statistcs
+type Stats struct {
+	TotalWorkers   int       `json:"totalWorkers"`
+	HealthyWorkers int       `json:"healthyWorkers"`
+	BusyWorkers    int       `json:"busyWorkers"`
+	PendingJobs    int       `json:"pendingJobs"`
+	Workers        []*Worker `json:"workers"`
+}
+
+//pool struct
+
+type Pool struct {
+	mu                sync.Mutex
+	workers           []*Worker
+	jobChan           chan *Job_W
+	httpClient        *http.Client
+	heartbeatInterval time.Duration
+	maxFailedPings    int
+
+	stopCh    chan struct{}
+	onceStart sync.Once
+	onceStop  sync.Once
+}
+
+// New creates a new pool with a bounded job queue.
 func New(queueSize int) *Pool {
 	return &Pool{
-		jobs:        make(chan internal.WorkerJob, queueSize),
-		workerStats: make(map[string]*internal.WorkerStats),
-		workerOrder: make([]string, 0),
+		workers:           make([]*Worker, 0),
+		jobChan:           make(chan *Job_W, queueSize),
+		httpClient:        &http.Client{Timeout: 15 * time.Second},
+		heartbeatInterval: 5 * time.Second,
+		maxFailedPings:    3,
+		stopCh:            make(chan struct{}),
 	}
 }
 
-/*
-Start initializes the worker pool
-*/
+// Start launches background goroutines (job loop + heartbeat loop).
 func (p *Pool) Start() {
-	for i := 1; i <= 50; i++ { // 50 concurrent job processors
-		go p.jobProcessor(i)
-	}
-	log.Println("Worker pool initialized with 50 job processors")
+	p.onceStart.Do(func() {
+		go p.jobLoop()
+		go p.heartbeatLoop()
+	})
 }
 
-/*
-jobProcessor handles jobs and manages worker health
-NOTE: Under high load, some requests may get "stuck in limbo" - they appear to hang
-while newer requests continue processing. This could be due to worker health check delays,
-channel/goroutine leaks, or mutex contention from heavy stats logging.
-*/
-func (p *Pool) jobProcessor(id int) {
-	for job := range p.jobs {
-		log.Printf("[Processor %d] Processing job with worker %s", id, job.WorkerURL)
-
-		result := p.callWorker(job.WorkerURL, job.Request)
-
-		if isError(result) {
-			log.Printf("[Processor %d] Worker %s failed, removing from pool", id, job.WorkerURL)
-			p.updateWorkerStats(job.WorkerURL, false)
-			p.RemoveWorker(job.WorkerURL)
-			//TODO: Now that the worker failed, re-run the job!!
-		} else {
-			p.updateWorkerStats(job.WorkerURL, true)
-		}
-
-		job.ReplyCh <- result
-	}
+// Stop gracefully stops the pool.
+func (p *Pool) Stop() {
+	p.onceStop.Do(func() {
+		close(p.stopCh)
+	})
 }
 
-/*
-callWorker sends an inference request to a worker via its standardized /execute endpoint
-*/
-func (p *Pool) callWorker(workerURL string, req internal.LlamaRequest) string {
-	jsonData, err := json.Marshal(req)
-	if err != nil {
-		return fmt.Sprintf("Error marshaling request: %v", err)
-	}
-
-	/*
-		TODO: right now this is hard-coded. We need to update this so that callWorker adds info about
-			what endpoint we're trying to hit. So whether it's chat or otherwise.
-			Should depend on the gollama endpoint.
-	*/
-	executeReq := map[string]interface{}{
-		"endpoint": "/v1/chat/completions",
-		"body":     json.RawMessage(jsonData),
-	}
-
-	executePayload, err := json.Marshal(executeReq)
-	if err != nil {
-		return fmt.Sprintf("Error marshaling execute request: %v", err)
-	}
-
-	resp, err := http.Post(
-		fmt.Sprintf("%s/execute", workerURL),
-		"application/json",
-		bytes.NewBuffer(executePayload),
-	)
-	if err != nil {
-		return fmt.Sprintf("Error contacting worker: %v", err)
-	}
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			log.Printf("Error closing response body: %v", err)
-		}
-	}(resp.Body)
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Sprintf("Error reading response: %v", err)
-	}
-
-	var workerResp internal.LlamaResponse
-	err = json.Unmarshal(body, &workerResp)
-	if err != nil {
-		return fmt.Sprintf("Error parsing response: %v", err)
-	}
-
-	if workerResp.Error != "" {
-		return fmt.Sprintf("Worker error: %s", workerResp.Error)
-	}
-
-	if len(workerResp.Choices) == 0 {
-		return "Worker error: no choices in response"
-	}
-
-	return workerResp.Choices[0].Message.Content
-}
-
-/*
-updateWorkerStats updates the statistics for a worker after job completion
-*/
-func (p *Pool) updateWorkerStats(url string, success bool) {
+// AddWorker is called by /connectWorker to register or refresh a worker.
+func (p *Pool) AddWorker(url, model string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	stats, exists := p.workerStats[url]
-	if !exists {
-		return // Worker not found, probably already removed
-	}
-
-	if success {
-		stats.JobsCompleted++
-		log.Printf("Worker %s completed job (total: %d, failed: %d, uptime: %s)",
-			url, stats.JobsCompleted, stats.JobsFailed, time.Since(stats.StartTime).Round(time.Second))
-	} else {
-		stats.JobsFailed++
-		log.Printf("Worker %s failed job (total: %d, failed: %d, uptime: %s)",
-			url, stats.JobsCompleted, stats.JobsFailed, time.Since(stats.StartTime).Round(time.Second))
-	}
-}
-
-/*
-isError checks if the result is an error message
-*/
-func isError(result string) bool {
-	return len(result) > 5 && (result[:5] == "Error" || result[:5] == "error" || result[:6] == "Worker")
-}
-
-/*
-SubmitJob adds a job to the worker pool queue
-*/
-func (p *Pool) SubmitJob(job internal.WorkerJob) {
-	p.jobs <- job
-}
-
-/*
-AddWorker adds a new worker to the pool
-*/
-func (p *Pool) AddWorker(url string) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	// Check if worker already exists
-	if _, exists := p.workerStats[url]; exists {
-		log.Printf("Worker %s already registered", url)
-		return
-	}
-
-	// Initialize worker stats
-	p.workerStats[url] = &internal.WorkerStats{
-		URL:           url,
-		JobsCompleted: 0,
-		JobsFailed:    0,
-		StartTime:     time.Now(),
-	}
-
-	p.workerOrder = append(p.workerOrder, url)
-	log.Printf("Added worker: %s (total workers: %d)", url, len(p.workerOrder))
-}
-
-/*
-RemoveWorker removes a worker from the pool
-*/
-func (p *Pool) RemoveWorker(url string) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	// Remove from stats map
-	if stats, exists := p.workerStats[url]; exists {
-		log.Printf("Removing worker: %s (completed: %d, failed: %d, uptime: %s)",
-			url, stats.JobsCompleted, stats.JobsFailed, time.Since(stats.StartTime).Round(time.Second))
-		delete(p.workerStats, url)
-	}
-
-	// Remove from order slice
-	for i, w := range p.workerOrder {
-		if w == url {
-			p.workerOrder = append(p.workerOrder[:i], p.workerOrder[i+1:]...)
-			log.Printf("Worker %s removed (total workers: %d)", url, len(p.workerOrder))
+	// If worker already exists, refresh it.
+	for _, w := range p.workers {
+		if w.URL == url {
+			w.Model = model
+			w.Status = StatusHealthy
+			w.Busy = false
+			w.LastHeartbeat = time.Now()
+			w.FailedPings = 0
 			return
 		}
 	}
+
+	w := &Worker{
+		URL:           url,
+		Model:         model,
+		Status:        StatusHealthy,
+		Busy:          false,
+		LastHeartbeat: time.Now(),
+	}
+	p.workers = append(p.workers, w)
 }
 
-/*
-GetWorkerURL returns a worker URL
-*/
-func (p *Pool) GetWorkerURL() string {
+// EnqueueJob puts a job into the queue.
+func (p *Pool) EnqueueJob(job *Job_W) error {
+	select {
+	case p.jobChan <- job:
+		return nil
+	case <-job.Ctx.Done():
+		return job.Ctx.Err()
+	}
+}
+
+// GetStats returns a snapshot of pool state.
+func (p *Pool) GetStats() Stats {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if len(p.workerOrder) == 0 {
-		return "" //error - no workers
+	stats := Stats{
+		TotalWorkers: len(p.workers),
+		PendingJobs:  len(p.jobChan),
+		Workers:      make([]*Worker, 0, len(p.workers)),
 	}
 
-	/*
-		basically just keep getting the next worker, reset back to first worker when all workers have been handled.
-		TODO: Get a list of IDLE workers. Then from there, follow round-robin. But prioritize idle workers.
-			Probably lots of clever ways to handle distributing worker load.
-			But this implies the client needs to maintain some kind of state - idle / not idle etc.
-	*/
-	// Reset nextIdx if it's out of bounds (happens when workers are removed)
-	if p.nextIdx >= len(p.workerOrder) {
-		p.nextIdx = 0
+	for _, w := range p.workers {
+		if w.Status == StatusHealthy {
+			stats.HealthyWorkers++
+		}
+		if w.Busy {
+			stats.BusyWorkers++
+		}
+		stats.Workers = append(stats.Workers, w)
 	}
 
-	worker := p.workerOrder[p.nextIdx]
-	p.nextIdx = (p.nextIdx + 1) % len(p.workerOrder)
-
-	return worker
-}
-
-/*
-GetWorkerCount returns the number of available workers
-*/
-func (p *Pool) GetWorkerCount() int {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	return len(p.workerOrder)
-}
-
-/*
-GetWorkerStats returns a copy of all worker statistics
-*/
-func (p *Pool) GetWorkerStats() map[string]internal.WorkerStats {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-
-	stats := make(map[string]internal.WorkerStats)
-	for url, workerStats := range p.workerStats {
-		stats[url] = *workerStats
-	}
 	return stats
+}
+
+func (p *Pool) jobLoop() {
+	for {
+		select {
+		case <-p.stopCh:
+			return
+		case job := <-p.jobChan:
+			p.handleJob(job)
+		}
+	}
+}
+
+func (p *Pool) handleJob(job *Job_W) {
+	worker := p.pickAvailableWorker()
+	if worker == nil {
+		job.ErrorChan <- errors.New("no healthy workers available")
+		return
+	}
+
+	// Mark worker busy.
+	p.mu.Lock()
+	worker.Busy = true
+	p.mu.Unlock()
+
+	defer func() {
+		p.mu.Lock()
+		worker.Busy = false
+		p.mu.Unlock()
+	}()
+
+	// Prepare request to worker: POST <workerURL>/execute
+	payload := map[string]any{
+		"endpoint": job.Endpoint,
+		"body":     job.Body,
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		job.ErrorChan <- err
+		return
+	}
+
+	req, err := http.NewRequestWithContext(job.Ctx, http.MethodPost, worker.URL+"/execute", bytes.NewReader(data))
+	if err != nil {
+		job.ErrorChan <- err
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := p.httpClient.Do(req)
+	if err != nil {
+		p.markFailure(worker, err.Error())
+		job.ErrorChan <- err
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		p.markFailure(worker, resp.Status)
+		job.ErrorChan <- errors.New("worker returned status " + resp.Status)
+		return
+	}
+
+	buf := new(bytes.Buffer)
+	if _, err = buf.ReadFrom(resp.Body); err != nil {
+		p.markFailure(worker, err.Error())
+		job.ErrorChan <- err
+		return
+	}
+
+	p.markSuccess(worker)
+	job.ResponseChan <- buf.Bytes()
+}
+
+func (p *Pool) heartbeatLoop() {
+	ticker := time.NewTicker(p.heartbeatInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-p.stopCh:
+			return
+		case <-ticker.C:
+			p.checkWorkers()
+		}
+	}
+}
+
+func (p *Pool) checkWorkers() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	alive := p.workers[:0] // reuse underlying slice
+
+	for _, w := range p.workers {
+		ok := p.pingWorker(w)
+		if ok {
+			alive = append(alive, w)
+		}
+		// if !ok, we drop it by not appending
+	}
+
+	p.workers = alive
+}
+
+func (p *Pool) pingWorker(w *Worker) bool {
+	resp, err := p.httpClient.Get(w.URL + "/health")
+	if err != nil {
+		w.FailedPings++
+		if w.FailedPings >= p.maxFailedPings {
+			w.Status = StatusUnhealthy
+		}
+		return w.Status == StatusHealthy
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		w.Status = StatusHealthy
+		w.FailedPings = 0
+		w.LastHeartbeat = time.Now()
+		return true
+	}
+
+	w.FailedPings++
+	if w.FailedPings >= p.maxFailedPings {
+		w.Status = StatusUnhealthy
+	}
+	return w.Status == StatusHealthy
+}
+
+// pickAvailableWorker returns a healthy, not-busy worker (simple scan + wait).
+func (p *Pool) pickAvailableWorker() *Worker {
+	for i := 0; i < 1000; i++ { // crude cap to avoid infinite loop
+		p.mu.Lock()
+		var chosen *Worker
+		for _, w := range p.workers {
+			if w.Status == StatusHealthy && !w.Busy {
+				chosen = w
+				break
+			}
+		}
+		p.mu.Unlock()
+
+		if chosen != nil {
+			return chosen
+		}
+
+		// Everyone is busy at the moment, wait a bit.
+		time.Sleep(10 * time.Millisecond)
+	}
+	return nil
+}
+
+func (p *Pool) markSuccess(w *Worker) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	w.TotalJobs++
+	w.LastError = ""
+	w.Status = StatusHealthy
+}
+
+func (p *Pool) markFailure(w *Worker, msg string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	w.TotalJobs++
+	w.TotalFailures++
+	w.LastError = msg
 }

@@ -33,7 +33,7 @@ func HandleConnectWorker(p *pool.Pool) http.HandlerFunc {
 		}
 
 		//worker already did health check - should be OK for now
-		p.AddWorker(workerInfo.URL)
+		p.AddWorker(workerInfo.URL, workerInfo.Model)
 
 		w.Header().Set("Content-Type", "application/json")
 		response := map[string]string{
