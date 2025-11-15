@@ -88,6 +88,8 @@ type WorkerStats struct {
 	JobsCompleted int       `json:"jobs_completed"`
 	JobsFailed    int       `json:"jobs_failed"`
 	StartTime     time.Time `json:"start_time"`
+	CurrentJobs   int       `json:"current_jobs"`
+	MaxConcurrent int       `json:"max_concurrent"`
 }
 
 /*

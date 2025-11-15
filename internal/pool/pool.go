@@ -51,11 +51,30 @@ NOTE: Under high load, some requests may get "stuck in limbo" - they appear to h
 while newer requests continue processing. This could be due to worker health check delays,
 channel/goroutine leaks, or mutex contention from heavy stats logging.
 */
+
+func (p *Pool) setWorkerBusy(url string, delta int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	stats, exists := p.workerStats[url]
+	if !exists {
+		return
+	}
+
+	stats.CurrentJobs += delta
+	if stats.CurrentJobs < 0 {
+		stats.CurrentJobs = 0 // safety
+	}
+}
 func (p *Pool) jobProcessor(id int) {
 	for job := range p.jobs {
 		log.Printf("[Processor %d] Processing job with worker %s", id, job.WorkerURL)
+		// mark worker as having one more in-flight job
+		p.setWorkerBusy(job.WorkerURL, +1)
 
 		result := p.callWorker(job.WorkerURL, job.Request)
+
+		p.setWorkerBusy(job.WorkerURL, -1)
 
 		if isError(result) {
 			log.Printf("[Processor %d] Worker %s failed, removing from pool", id, job.WorkerURL)
@@ -203,6 +222,8 @@ func (p *Pool) AddWorker(url string) {
 		JobsCompleted: 0,
 		JobsFailed:    0,
 		StartTime:     time.Now(),
+		CurrentJobs:   0,
+		MaxConcurrent: 1,
 	}
 
 	p.workerOrder = append(p.workerOrder, url)
@@ -241,25 +262,39 @@ func (p *Pool) GetWorker() string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if len(p.workerOrder) == 0 {
-		return "" //error - no workers
+	n := len(p.workerOrder)
+	if n == 0 {
+		return "" // no workers
 	}
 
-	/*
-		basically just keep getting the next worker, reset back to first worker when all workers have been handled.
-		TODO: Get a list of IDLE workers. Then from there, follow round-robin. But prioritize idle workers.
-			Probably lots of clever ways to handle distributing worker load.
-			But this implies the worker needs to maintain some kind of state - idle / not idle etc.
-	*/
-	// Reset nextIdx if it's out of bounds (happens when workers are removed)
-	if p.nextIdx >= len(p.workerOrder) {
-		p.nextIdx = 0
+	// Try each worker at most once (round-robin)
+	for i := 0; i < n; i++ {
+		// keep nextIdx in range
+		if p.nextIdx >= len(p.workerOrder) {
+			p.nextIdx = 0
+		}
+
+		url := p.workerOrder[p.nextIdx]
+		p.nextIdx = (p.nextIdx + 1) % len(p.workerOrder)
+
+		stats, exists := p.workerStats[url]
+		if !exists {
+			continue
+		}
+
+		maxConc := stats.MaxConcurrent
+		if maxConc <= 0 {
+			maxConc = 1
+		}
+
+		// only use workers that are not at capacity
+		if stats.CurrentJobs < maxConc {
+			return url
+		}
 	}
 
-	worker := p.workerOrder[p.nextIdx]
-	p.nextIdx = (p.nextIdx + 1) % len(p.workerOrder)
-
-	return worker
+	// All workers are at capacity
+	return ""
 }
 
 /*
