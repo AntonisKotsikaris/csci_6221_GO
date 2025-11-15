@@ -1,5 +1,6 @@
 package main
 
+//load test
 import (
 	"bytes"
 	"encoding/json"
@@ -147,7 +148,7 @@ func main() {
 		wg.Add(1)
 		go func(reqNum int) {
 			defer wg.Done()
-			sem <- struct{}{} // Acquire semaphore
+			sem <- struct{}{}        // Acquire semaphore
 			defer func() { <-sem }() // Release semaphore
 
 			latency, success := sendChatRequest(*serverURL, fmt.Sprintf("%s #%d", *message, reqNum))
