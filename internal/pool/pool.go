@@ -262,13 +262,12 @@ func (p *Pool) GetWorker() string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	n := len(p.workerOrder)
-	if n == 0 {
+	if len(p.workerOrder) == 0 {
 		return "" // no workers
 	}
 
 	// Try each worker at most once (round-robin)
-	for i := 0; i < n; i++ {
+	for i := 0; i < len(p.workerOrder); i++ {
 		// keep nextIdx in range
 		if p.nextIdx >= len(p.workerOrder) {
 			p.nextIdx = 0
