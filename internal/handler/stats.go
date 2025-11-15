@@ -51,6 +51,8 @@ calculateWorkerScore computes a raw productivity score
 Formula: jobs_completed × uptime_minutes
 This rewards both speed AND reliability - workers who complete many jobs
 and stay online longer get higher scores. No artificial caps or percentages.
+
+TODO: This would probably better if we were logging tokens and time to complete tasks.
 */
 func calculateWorkerScore(stat internal.WorkerStats, uptime time.Duration) float64 {
 	if stat.JobsCompleted == 0 {
@@ -58,7 +60,5 @@ func calculateWorkerScore(stat internal.WorkerStats, uptime time.Duration) float
 	}
 
 	// Raw productivity: jobs completed × minutes active
-	// Example: 20 jobs over 10 minutes = 200 points
-	// Example: 30 jobs over 5 minutes = 150 points
 	return float64(stat.JobsCompleted) * uptime.Minutes()
 }

@@ -17,7 +17,7 @@ Pool holds the last-known pool of workers. Workers are verified, used, or discar
 jobProcessor.
 */
 type Pool struct {
-	jobs        chan internal.WorkerJob          //job queue
+	jobs        chan internal.WorkerJob          //job queue channel - send jobs messages to this channel
 	workerStats map[string]*internal.WorkerStats // worker stats by URL
 	workerOrder []string                         // ordered list of worker URLs for round-robin
 	mu          sync.RWMutex                     // Protects worker data during concurrent calls
@@ -61,12 +61,28 @@ func (p *Pool) jobProcessor(id int) {
 			log.Printf("[Processor %d] Worker %s failed, removing from pool", id, job.WorkerURL)
 			p.updateWorkerStats(job.WorkerURL, false)
 			p.RemoveWorker(job.WorkerURL)
-			//TODO: Now that the worker failed, re-run the job!!
+
+			// Retry the job with a different worker if retries are available
+			if job.RetryCount < job.MaxRetries {
+				job.RetryCount++
+				job.WorkerURL = p.GetWorker() // Get a new worker
+				if job.WorkerURL != "" {
+					log.Printf("[Processor %d] Retrying job (attempt %d/%d) with worker %s",
+						id, job.RetryCount, job.MaxRetries, job.WorkerURL)
+					p.SubmitJob(job) // Requeue the job
+					return           // Don't send response yet, let the retry handle it
+				} else {
+					log.Printf("[Processor %d] No workers available for retry", id)
+					job.ReplyCh <- "Error: No available workers for retry"
+				}
+			} else {
+				log.Printf("[Processor %d] Job exceeded max retries (%d), giving up", id, job.MaxRetries)
+				job.ReplyCh <- "Error: Job failed after maximum retries"
+			}
 		} else {
 			p.updateWorkerStats(job.WorkerURL, true)
+			job.ReplyCh <- result
 		}
-
-		job.ReplyCh <- result
 	}
 }
 
@@ -175,13 +191,13 @@ func (p *Pool) AddWorker(url string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// Check if worker already exists
+	// Check if worker already exists - don't add them to the pool if they do
 	if _, exists := p.workerStats[url]; exists {
 		log.Printf("Worker %s already registered", url)
 		return
 	}
 
-	// Initialize worker stats
+	//initialize stats.
 	p.workerStats[url] = &internal.WorkerStats{
 		URL:           url,
 		JobsCompleted: 0,
@@ -207,7 +223,7 @@ func (p *Pool) RemoveWorker(url string) {
 		delete(p.workerStats, url)
 	}
 
-	// Remove from order slice
+	// Remove from worker map
 	for i, w := range p.workerOrder {
 		if w == url {
 			p.workerOrder = append(p.workerOrder[:i], p.workerOrder[i+1:]...)
@@ -218,9 +234,10 @@ func (p *Pool) RemoveWorker(url string) {
 }
 
 /*
-GetWorkerURL returns a worker URL
+GetWorker returns a worker - currently it's specified by URL
+returns a URL linked to the worker
 */
-func (p *Pool) GetWorkerURL() string {
+func (p *Pool) GetWorker() string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 

@@ -41,14 +41,16 @@ func HandleChat(p *pool.Pool) http.HandlerFunc {
 		replyCh := make(chan string)
 
 		job := internal.WorkerJob{
-			Request:   llamaReq,
-			ReplyCh:   replyCh,
-			WorkerURL: p.GetWorkerURL(),
+			Request:    llamaReq,
+			ReplyCh:    replyCh,
+			WorkerURL:  p.GetWorker(),
+			RetryCount: 0,
+			MaxRetries: 3,
 		}
 		log.Printf("Worker job processed at URL: %s", job.WorkerURL)
 
 		p.SubmitJob(job)
-		reply := <-replyCh
+		reply := <-replyCh //must wait for reply from the job reply channel
 
 		chatResp := internal.ChatResponse{Reply: reply}
 		w.Header().Set("Content-Type", "application/json")
