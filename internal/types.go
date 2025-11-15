@@ -94,7 +94,9 @@ type WorkerStats struct {
 WorkerJob represents a request to be processed by a worker
 */
 type WorkerJob struct {
-	Request   LlamaRequest
-	ReplyCh   chan string
-	WorkerURL string
+	Request    LlamaRequest
+	ReplyCh    chan string
+	WorkerURL  string
+	RetryCount int
+	MaxRetries int
 }
