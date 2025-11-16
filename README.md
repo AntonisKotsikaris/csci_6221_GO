@@ -18,6 +18,8 @@ This allows distributed inference across many machines, all routed back to the G
 ### Setup Instructions
 
 #### 1. Install Build Tools
+Skip this step if you already have xcode tools and git installed.
+
 
 **macOS:**
 ```bash
@@ -38,6 +40,7 @@ choco install cmake git
 ```
 
 #### 2. Clone and Build llama.cpp
+This instructions may become out of date. Please refer to the llama.cpp installation instructions located on the [official Llama.cpp repository](https://github.com/ggml-org/llama.cpp?tab=readme-ov-file#quick-start). 
 
 ```bash
 # Clone llama.cpp
@@ -110,12 +113,15 @@ git clone https://github.com/AntonisKotsikaris/csci_6221_GO.git
 cd csci_6221_GO
 
 # Run the server
-go run main.go
+go run cmd/gollama/main.go
 ```
 
 The Gollama server should start on `http://localhost:9000`
 
-#### 7. Test the Gollama API
+#### 7. Spin up test workers
+In a new terminal, follow the worker config steps below to set up a new worker. You can repeat this process to spin multiple test workers.
+
+#### 8. Test the Gollama API
 
 Using curl:
 ```bash
@@ -144,8 +150,17 @@ go run tests/loadtest.go -requests 1000 -concurrency 50 -message "Stress test me
 
 Adjust requests and concurrency depending on scale of test you need.
 
-## Client config
-You can choose what port to host the client on and what llama.cpp port it's connecting to with the flags `-port` and `llama-port`, respectively. By default the Gollama server starts on port 9000, so clients begin at port 9001. For example:
+## Worker config
+You can choose what port to host the worker on and what llama.cpp port it's connecting to with the flags `-port` and `llama-port`, respectively. By default, the Gollama server starts on port 9000, so workers begin at port 9001. For example:
 ```
-go run cmd/client/main.go -port 9001 -llama-port 8080
+go run cmd/worker/main.go -port 9001 -llama-port 8080
 ```
+
+## Future improvements:
+1. Chat history - enable chat history by saving messages
+2. Gollama db - maintain a gollama db which saves:
+   1. worker stats
+   2. user info, usage, chat history, projects, etc.
+   3. high level server metrics
+4. Detailed logs - export to graphana etc.
+5. UI!

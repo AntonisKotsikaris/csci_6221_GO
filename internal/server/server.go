@@ -13,17 +13,19 @@ import (
 Server manages the HTTP server and routes
 */
 type Server struct {
-	pool *pool.Pool
-	port int
+	pool             *pool.Pool
+	port             int
+	defaultMaxTokens int
 }
 
 /*
 New creates a new server instance
 */
-func New(p *pool.Pool, port int) *Server {
+func New(p *pool.Pool, port int, defaultMaxTokens int) *Server {
 	return &Server{
-		pool: p,
-		port: port,
+		pool:             p,
+		port:             port,
+		defaultMaxTokens: defaultMaxTokens,
 	}
 }
 
@@ -33,7 +35,7 @@ Setup configures all routes and starts the server
 func (s *Server) Setup() {
 	// Register handlers
 	http.HandleFunc("/connectWorker", handler.HandleConnectWorker(s.pool))
-	http.HandleFunc("/chat", handler.HandleChat(s.pool))
+	http.HandleFunc("/chat", handler.HandleChat(s.pool, s.defaultMaxTokens))
 	http.HandleFunc("/health", handler.HandleHealth(s.pool))
 	http.HandleFunc("/stats", handler.HandleStats(s.pool))
 	http.HandleFunc("/summarize", handler.HandleSummarize(s.pool))

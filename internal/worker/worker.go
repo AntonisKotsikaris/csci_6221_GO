@@ -11,6 +11,7 @@ import (
 
 var clientPort int
 var llamaPort int
+var busyFlag bool
 
 /*
 Client manages the HTTP worker that connects to llama.cpp
@@ -65,7 +66,7 @@ func handleHealth(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(http.StatusOK)
 	log.Printf("  GET /health - OK")
-	fmt.Fprintf(writer, `{"status":"ok"}`)
+	fmt.Fprintf(writer, `{"busy":"%v"}`, busyFlag)
 }
 
 func handleConnectToServer(writer http.ResponseWriter, request *http.Request) {
@@ -121,6 +122,8 @@ func handleExecute(writer http.ResponseWriter, request *http.Request) {
 		Endpoint string          `json:"endpoint"`
 		Body     json.RawMessage `json:"body"`
 	}
+	busyFlag = true
+
 	err := json.NewDecoder(request.Body).Decode(&executeReq)
 	if err != nil {
 		http.Error(writer, "Invalid request", http.StatusBadRequest)
@@ -155,4 +158,5 @@ func handleExecute(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(resp.StatusCode)
 	writer.Write(body)
+	busyFlag = false
 }

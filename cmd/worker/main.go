@@ -17,21 +17,27 @@ func main() {
 	c := worker.New(*port)
 	c.Setup(*llamaPort)
 
-	// Auto-connect to server
+	// Start worker server first (non-blocking)
 	go func() {
-		log.Println("Attempting auto-connect to GoLlama server...")
-
-		resp, err := http.Get(fmt.Sprintf("http://localhost:%d/connect", *port))
-		if err != nil {
-			log.Printf("Auto-connect failed: %v", err)
-		} else {
-			resp.Body.Close()
-			log.Println("Auto-connect to server successful!")
+		if err := c.Start(); err != nil {
+			log.Fatalf("Worker server error: %v", err)
 		}
 	}()
+	autoConnect(port)
+	select {}
+}
 
-	//run
-	if err := c.Start(); err != nil {
-		log.Fatalf("Client error: %v", err)
+func autoConnect(port *int) {
+	log.Println("Attempting auto-connect to GoLlama server...")
+	resp, err := http.Get(fmt.Sprintf("http://localhost:%d/connect", *port))
+	if err != nil {
+		log.Fatalf("Auto-connect failed: %v - shutting down", err)
 	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Fatalf("Auto-connect failed: worker returned status %d - shutting down", resp.StatusCode)
+	}
+
+	log.Println("Auto-connect to server successful!")
 }
