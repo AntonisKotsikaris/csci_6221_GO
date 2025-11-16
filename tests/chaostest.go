@@ -1,5 +1,6 @@
 package main
 
+//chaostest
 import (
 	"bytes"
 	"encoding/json"
@@ -8,7 +9,6 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
-	"os"
 	"os/exec"
 	"sync"
 	"time"
@@ -23,13 +23,13 @@ type ChatResponse struct {
 }
 
 type TestResults struct {
-	TotalRequests    int
-	SuccessfulReqs   int
-	FailedReqs       int
-	WorkersSpawned   int
-	WorkersKilled    int
-	TestDuration     time.Duration
-	mu               sync.Mutex
+	TotalRequests  int
+	SuccessfulReqs int
+	FailedReqs     int
+	WorkersSpawned int
+	WorkersKilled  int
+	TestDuration   time.Duration
+	mu             sync.Mutex
 }
 
 func (r *TestResults) AddResult(success bool) {
