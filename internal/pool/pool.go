@@ -43,31 +43,6 @@ func (p *Pool) Start() {
 		go p.jobProcessor(i)
 	}
 	log.Println("Worker pool initialized with 50 job processors")
-
-	// Start health monitoring
-	go p.healthMonitor()
-	log.Println("Health monitor started")
-}
-
-/*
-healthMonitor periodically pings all workers to check their health status
-*/
-func (p *Pool) healthMonitor() {
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		p.mu.RLock()
-		workers := make([]string, 0, len(p.workerOrder))
-		for _, url := range p.workerOrder {
-			workers = append(workers, url)
-		}
-		p.mu.RUnlock()
-
-		for _, workerURL := range workers {
-			go p.checkWorkerHealth(workerURL)
-		}
-	}
 }
 
 /*
