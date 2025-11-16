@@ -43,6 +43,64 @@ func (p *Pool) Start() {
 		go p.jobProcessor(i)
 	}
 	log.Println("Worker pool initialized with 50 job processors")
+
+	// Start health monitoring
+	go p.healthMonitor()
+	log.Println("Health monitor started")
+}
+
+/*
+healthMonitor periodically pings all workers to check their health status
+*/
+func (p *Pool) healthMonitor() {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		p.mu.RLock()
+		workers := make([]string, 0, len(p.workerOrder))
+		for _, url := range p.workerOrder {
+			workers = append(workers, url)
+		}
+		p.mu.RUnlock()
+
+		for _, workerURL := range workers {
+			go p.checkWorkerHealth(workerURL)
+		}
+	}
+}
+
+/*
+checkWorkerHealth pings a worker's /health endpoint and updates its health status
+*/
+func (p *Pool) checkWorkerHealth(workerURL string) {
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+	}
+
+	resp, err := client.Get(fmt.Sprintf("%s/health", workerURL))
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	stats, exists := p.workerStats[workerURL]
+	if !exists {
+		return // Worker was removed
+	}
+
+	if err != nil || resp == nil || resp.StatusCode != http.StatusOK {
+		stats.Healthy = false
+		log.Printf("Health check failed for worker %s", workerURL)
+		if resp != nil {
+			resp.Body.Close()
+		}
+		return
+	}
+	defer resp.Body.Close()
+
+	stats.Healthy = true
+	stats.LastActive = time.Now()
+	log.Printf("Health check passed for worker %s", workerURL)
 }
 
 /*
@@ -55,11 +113,11 @@ func (p *Pool) jobProcessor(id int) {
 	for job := range p.jobs {
 		log.Printf("[Processor %d] Processing job with worker %s", id, job.WorkerURL)
 
-		result := p.callWorker(job.WorkerURL, job.Request)
+		result, latencyMS := p.callWorker(job.WorkerURL, job.Request)
 
 		if isError(result) {
 			log.Printf("[Processor %d] Worker %s failed, removing from pool", id, job.WorkerURL)
-			p.updateWorkerStats(job.WorkerURL, false)
+			p.updateWorkerStats(job.WorkerURL, false, 0)
 			p.RemoveWorker(job.WorkerURL)
 
 			// Retry the job with a different worker if retries are available
@@ -80,7 +138,7 @@ func (p *Pool) jobProcessor(id int) {
 				job.ReplyCh <- "Error: Job failed after maximum retries"
 			}
 		} else {
-			p.updateWorkerStats(job.WorkerURL, true)
+			p.updateWorkerStats(job.WorkerURL, true, latencyMS)
 			job.ReplyCh <- result
 		}
 	}
@@ -88,11 +146,14 @@ func (p *Pool) jobProcessor(id int) {
 
 /*
 callWorker sends an inference request to a worker via its standardized /execute endpoint
+Returns the response text and the latency in milliseconds
 */
-func (p *Pool) callWorker(workerURL string, req internal.LlamaRequest) string {
+func (p *Pool) callWorker(workerURL string, req internal.LlamaRequest) (string, float64) {
+	startTime := time.Now()
+
 	jsonData, err := json.Marshal(req)
 	if err != nil {
-		return fmt.Sprintf("Error marshaling request: %v", err)
+		return fmt.Sprintf("Error marshaling request: %v", err), 0
 	}
 
 	/*
@@ -107,7 +168,7 @@ func (p *Pool) callWorker(workerURL string, req internal.LlamaRequest) string {
 
 	executePayload, err := json.Marshal(executeReq)
 	if err != nil {
-		return fmt.Sprintf("Error marshaling execute request: %v", err)
+		return fmt.Sprintf("Error marshaling execute request: %v", err), 0
 	}
 
 	resp, err := http.Post(
@@ -116,7 +177,7 @@ func (p *Pool) callWorker(workerURL string, req internal.LlamaRequest) string {
 		bytes.NewBuffer(executePayload),
 	)
 	if err != nil {
-		return fmt.Sprintf("Error contacting worker: %v", err)
+		return fmt.Sprintf("Error contacting worker: %v", err), 0
 	}
 	defer func(Body io.ReadCloser) {
 		err := Body.Close()
@@ -127,30 +188,31 @@ func (p *Pool) callWorker(workerURL string, req internal.LlamaRequest) string {
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Sprintf("Error reading response: %v", err)
+		return fmt.Sprintf("Error reading response: %v", err), 0
 	}
 
 	var workerResp internal.LlamaResponse
 	err = json.Unmarshal(body, &workerResp)
 	if err != nil {
-		return fmt.Sprintf("Error parsing response: %v", err)
+		return fmt.Sprintf("Error parsing response: %v", err), 0
 	}
 
 	if workerResp.Error != "" {
-		return fmt.Sprintf("Worker error: %s", workerResp.Error)
+		return fmt.Sprintf("Worker error: %s", workerResp.Error), 0
 	}
 
 	if len(workerResp.Choices) == 0 {
-		return "Worker error: no choices in response"
+		return "Worker error: no choices in response", 0
 	}
 
-	return workerResp.Choices[0].Message.Content
+	latencyMS := float64(time.Since(startTime).Microseconds()) / 1000.0
+	return workerResp.Choices[0].Message.Content, latencyMS
 }
 
 /*
 updateWorkerStats updates the statistics for a worker after job completion
 */
-func (p *Pool) updateWorkerStats(url string, success bool) {
+func (p *Pool) updateWorkerStats(url string, success bool, latencyMS float64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -161,10 +223,23 @@ func (p *Pool) updateWorkerStats(url string, success bool) {
 
 	if success {
 		stats.JobsCompleted++
-		log.Printf("Worker %s completed job (total: %d, failed: %d, uptime: %s)",
-			url, stats.JobsCompleted, stats.JobsFailed, time.Since(stats.StartTime).Round(time.Second))
+		stats.Requests++
+		stats.LastActive = time.Now()
+		stats.Healthy = true
+
+		// Update running average response time
+		if stats.AvgResponseMS == 0 {
+			stats.AvgResponseMS = latencyMS
+		} else {
+			// Calculate new average: (old_avg * old_count + new_value) / new_count
+			stats.AvgResponseMS = ((stats.AvgResponseMS * float64(stats.Requests-1)) + latencyMS) / float64(stats.Requests)
+		}
+
+		log.Printf("Worker %s completed job in %.2fms (avg: %.2fms, total: %d, failed: %d, uptime: %s)",
+			url, latencyMS, stats.AvgResponseMS, stats.JobsCompleted, stats.JobsFailed, time.Since(stats.StartTime).Round(time.Second))
 	} else {
 		stats.JobsFailed++
+		stats.Healthy = false
 		log.Printf("Worker %s failed job (total: %d, failed: %d, uptime: %s)",
 			url, stats.JobsCompleted, stats.JobsFailed, time.Since(stats.StartTime).Round(time.Second))
 	}
@@ -199,10 +274,15 @@ func (p *Pool) AddWorker(url string) {
 
 	//initialize stats.
 	p.workerStats[url] = &internal.WorkerStats{
+		ID:            fmt.Sprintf("worker-%d", len(p.workerOrder)+1),
 		URL:           url,
 		JobsCompleted: 0,
 		JobsFailed:    0,
 		StartTime:     time.Now(),
+		AvgResponseMS: 0,
+		Requests:      0,
+		LastActive:    time.Now(),
+		Healthy:       true,
 	}
 
 	p.workerOrder = append(p.workerOrder, url)

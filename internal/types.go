@@ -84,10 +84,15 @@ type LlamaResponse struct {
 WorkerStats tracks performance metrics for a worker
 */
 type WorkerStats struct {
+	ID            string    `json:"id"`
 	URL           string    `json:"url"`
 	JobsCompleted int       `json:"jobs_completed"`
 	JobsFailed    int       `json:"jobs_failed"`
 	StartTime     time.Time `json:"start_time"`
+	AvgResponseMS float64   `json:"avg_response_ms"`
+	Requests      int       `json:"requests"`
+	LastActive    time.Time `json:"last_active"`
+	Healthy       bool      `json:"healthy"`
 }
 
 /*
@@ -99,4 +104,47 @@ type WorkerJob struct {
 	WorkerURL  string
 	RetryCount int
 	MaxRetries int
+}
+
+/*
+SummarizeRequest is what users send to the /summarize endpoint
+*/
+type SummarizeRequest struct {
+	Text string `json:"text"`
+}
+
+/*
+SummarizeResponse is what /summarize returns to clients
+*/
+type SummarizeResponse struct {
+	Summary string `json:"summary"`
+}
+
+/*
+TranslateRequest is what users send to the /translate endpoint
+*/
+type TranslateRequest struct {
+	Text     string `json:"text"`
+	Language string `json:"language"`
+}
+
+/*
+TranslateResponse is what /translate returns to clients
+*/
+type TranslateResponse struct {
+	Translation string `json:"translation"`
+}
+
+/*
+SentimentRequest is what users send to the /sentiment endpoint
+*/
+type SentimentRequest struct {
+	Text string `json:"text"`
+}
+
+/*
+SentimentResponse is what /sentiment returns to clients
+*/
+type SentimentResponse struct {
+	Sentiment string `json:"sentiment"`
 }
