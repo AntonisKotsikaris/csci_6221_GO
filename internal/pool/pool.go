@@ -46,39 +46,6 @@ func (p *Pool) Start() {
 }
 
 /*
-checkWorkerHealth pings a worker's /health endpoint and updates its health status
-*/
-func (p *Pool) checkWorkerHealth(workerURL string) {
-	client := &http.Client{
-		Timeout: 5 * time.Second,
-	}
-
-	resp, err := client.Get(fmt.Sprintf("%s/health", workerURL))
-
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	stats, exists := p.workerStats[workerURL]
-	if !exists {
-		return // Worker was removed
-	}
-
-	if err != nil || resp == nil || resp.StatusCode != http.StatusOK {
-		stats.Healthy = false
-		log.Printf("Health check failed for worker %s", workerURL)
-		if resp != nil {
-			resp.Body.Close()
-		}
-		return
-	}
-	defer resp.Body.Close()
-
-	stats.Healthy = true
-	stats.LastActive = time.Now()
-	log.Printf("Health check passed for worker %s", workerURL)
-}
-
-/*
 jobProcessor handles jobs and manages worker health
 NOTE: Under high load, some requests may get "stuck in limbo" - they appear to hang
 while newer requests continue processing. This could be due to worker health check delays,
@@ -249,7 +216,6 @@ func (p *Pool) AddWorker(url string) {
 
 	//initialize stats.
 	p.workerStats[url] = &internal.WorkerStats{
-		ID:            fmt.Sprintf("worker-%d", len(p.workerOrder)+1),
 		URL:           url,
 		JobsCompleted: 0,
 		JobsFailed:    0,
@@ -257,7 +223,6 @@ func (p *Pool) AddWorker(url string) {
 		AvgResponseMS: 0,
 		Requests:      0,
 		LastActive:    time.Now(),
-		Healthy:       true,
 	}
 
 	p.workerOrder = append(p.workerOrder, url)

@@ -39,7 +39,6 @@ func (s *Server) Setup() {
 	http.HandleFunc("/summarize", handler.HandleSummarize(s.pool))
 	http.HandleFunc("/translate", handler.HandleTranslate(s.pool))
 	http.HandleFunc("/sentiment", handler.HandleSentiment(s.pool))
-	http.HandleFunc("/leaderboard", handler.HandleLeaderboard(s.pool))
 
 	log.Printf("GoLlama server running on http://localhost:%d", s.port)
 	log.Println("Forwarding to llama.cpp workers")
