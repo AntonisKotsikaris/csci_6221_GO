@@ -86,8 +86,16 @@ channel/goroutine leaks, or mutex contention from heavy stats logging.
 
 func (p *Pool) jobProcessor(id int) {
 	for job := range p.jobs {
+		jobStart := time.Now()
 		log.Printf("[Processor %d] Processing job with worker %s", id, job.WorkerURL)
+
+		healthCheckStart := time.Now()
 		busy, healthy := p.isWorkerBusy(job.WorkerURL)
+		healthCheckDuration := time.Since(healthCheckStart)
+
+		if healthCheckDuration > 100*time.Millisecond {
+			log.Printf("[Processor %d] Health check took %v (slow!)", id, healthCheckDuration)
+		}
 
 		if !healthy {
 			log.Printf("[Processor %d] Worker %s is unhealthy, removing from pool", id, job.WorkerURL)
@@ -104,7 +112,14 @@ func (p *Pool) jobProcessor(id int) {
 		}
 
 		// Worker is healthy and not busy - proceed with the call
+		callStart := time.Now()
 		result := p.callWorker(job.WorkerURL, job.Request)
+		callDuration := time.Since(callStart)
+
+		totalDuration := time.Since(jobStart)
+		queueDepth := len(p.jobs)
+		log.Printf("[Processor %d] Job completed in %v (health check: %v, worker call: %v) - Queue depth: %d",
+			id, totalDuration, healthCheckDuration, callDuration, queueDepth)
 
 		if isError(result) {
 			log.Printf("[Processor %d] Worker %s failed, removing from pool", id, job.WorkerURL)
@@ -307,15 +322,15 @@ func (p *Pool) RemoveWorker(url string) {
 }
 
 /*
-GetWorker returns a worker - currently it's specified by URL
-returns a URL linked to the worker
+GetWorker returns a worker using round-robin selection
+Returns empty string if no workers are available
 */
 func (p *Pool) GetWorker() string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	if len(p.workerOrder) == 0 {
-		return "" //error - no workers
+		return "" // No workers available
 	}
 
 	if p.nextIdx >= len(p.workerOrder) {

@@ -22,7 +22,7 @@ LoadServerConfig loads server configuration from environment variables with defa
 */
 func LoadServerConfig() *ServerConfig {
 	return &ServerConfig{
-		Port:              getEnvInt("PORT", 9000),
+		Port:              getEnvInt("GOLLAMA_PORT", 9000),
 		QueueSize:         getEnvInt("QUEUE_SIZE", 5000),
 		ConcurrentWorkers: getEnvInt("CONCURRENT_WORKERS", 10),
 		MaxRetries:        getEnvInt("MAX_RETRIES", 3),
