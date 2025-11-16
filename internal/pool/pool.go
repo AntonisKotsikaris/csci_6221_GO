@@ -17,32 +17,64 @@ Pool holds the last-known pool of workers. Workers are verified, used, or discar
 jobProcessor.
 */
 type Pool struct {
-	jobs        chan internal.WorkerJob          //job queue channel - send jobs messages to this channel
-	workerStats map[string]*internal.WorkerStats // worker stats by URL
-	workerOrder []string                         // ordered list of worker URLs for round-robin
-	mu          sync.RWMutex                     // Protects worker data during concurrent calls
-	nextIdx     int
+	jobs              chan internal.WorkerJob          //job queue channel - send jobs messages to this channel
+	workerStats       map[string]*internal.WorkerStats // worker stats by URL
+	workerOrder       []string                         // ordered list of worker URLs for round-robin
+	mu                sync.RWMutex                     // Protects worker data during concurrent calls
+	nextIdx           int
+	concurrentWorkers int // Number of concurrent job processors
+	maxRetries        int // Maximum number of retries per job
 }
 
 /*
-New creates a new worker pool
+New creates a new worker pool with the specified configuration
 */
-func New(queueSize int) *Pool {
+func New(queueSize int, concurrentWorkers int, maxRetries int) *Pool {
 	return &Pool{
-		jobs:        make(chan internal.WorkerJob, queueSize),
-		workerStats: make(map[string]*internal.WorkerStats),
-		workerOrder: make([]string, 0),
+		jobs:              make(chan internal.WorkerJob, queueSize),
+		workerStats:       make(map[string]*internal.WorkerStats),
+		workerOrder:       make([]string, 0),
+		concurrentWorkers: concurrentWorkers,
+		maxRetries:        maxRetries,
 	}
 }
 
 /*
-Start initializes the worker pool
+Start initializes the worker pool with configured number of concurrent processors
 */
 func (p *Pool) Start() {
-	for i := 1; i <= 50; i++ { // 50 concurrent job processors
+	for i := 1; i <= p.concurrentWorkers; i++ {
 		go p.jobProcessor(i)
 	}
-	log.Println("Worker pool initialized with 50 job processors")
+	log.Printf("Worker pool initialized with %d job processors", p.concurrentWorkers)
+}
+
+/*
+retryJob attempts to retry a failed job with a different worker
+  - job:
+  - processorID:
+  - maxRetriesErrorMsg
+*/
+func (p *Pool) retryJob(
+	job *internal.WorkerJob,
+	processorID int,
+	maxRetriesErrorMsg string,
+) {
+	if job.RetryCount < job.MaxRetries {
+		job.RetryCount++
+		job.WorkerURL = p.GetWorker()
+		if job.WorkerURL != "" {
+			log.Printf("[Processor %d] Retrying job (attempt %d/%d) with worker %s",
+				processorID, job.RetryCount, job.MaxRetries, job.WorkerURL)
+			p.SubmitJob(*job)
+		} else {
+			log.Printf("[Processor %d] No workers available for retry", processorID)
+			job.ReplyCh <- "Error: No available workers for retry"
+		}
+	} else {
+		log.Printf("[Processor %d] Job exceeded max retries (%d)", processorID, job.MaxRetries)
+		job.ReplyCh <- maxRetriesErrorMsg
+	}
 }
 
 /*
@@ -52,52 +84,33 @@ while newer requests continue processing. This could be due to worker health che
 channel/goroutine leaks, or mutex contention from heavy stats logging.
 */
 
-func (p *Pool) setWorkerBusy(url string, delta int) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	stats, exists := p.workerStats[url]
-	if !exists {
-		return
-	}
-
-	stats.CurrentJobs += delta
-	if stats.CurrentJobs < 0 {
-		stats.CurrentJobs = 0 // safety
-	}
-}
 func (p *Pool) jobProcessor(id int) {
 	for job := range p.jobs {
 		log.Printf("[Processor %d] Processing job with worker %s", id, job.WorkerURL)
-		// mark worker as having one more in-flight job
-		p.setWorkerBusy(job.WorkerURL, +1)
+		busy, healthy := p.isWorkerBusy(job.WorkerURL)
 
+		if !healthy {
+			log.Printf("[Processor %d] Worker %s is unhealthy, removing from pool", id, job.WorkerURL)
+			p.updateWorkerStats(job.WorkerURL, false)
+			p.RemoveWorker(job.WorkerURL)
+			p.retryJob(&job, id, "Error: Job failed after maximum retries")
+			return
+		}
+
+		if busy {
+			log.Printf("[Processor %d] Worker %s is busy, trying different worker", id, job.WorkerURL)
+			p.retryJob(&job, id, "Error: All workers busy or unavailable")
+			return
+		}
+
+		// Worker is healthy and not busy - proceed with the call
 		result := p.callWorker(job.WorkerURL, job.Request)
-
-		p.setWorkerBusy(job.WorkerURL, -1)
 
 		if isError(result) {
 			log.Printf("[Processor %d] Worker %s failed, removing from pool", id, job.WorkerURL)
 			p.updateWorkerStats(job.WorkerURL, false)
 			p.RemoveWorker(job.WorkerURL)
-
-			// Retry the job with a different worker if retries are available
-			if job.RetryCount < job.MaxRetries {
-				job.RetryCount++
-				job.WorkerURL = p.GetWorker() // Get a new worker
-				if job.WorkerURL != "" {
-					log.Printf("[Processor %d] Retrying job (attempt %d/%d) with worker %s",
-						id, job.RetryCount, job.MaxRetries, job.WorkerURL)
-					p.SubmitJob(job) // Requeue the job
-					return           // Don't send response yet, let the retry handle it
-				} else {
-					log.Printf("[Processor %d] No workers available for retry", id)
-					job.ReplyCh <- "Error: No available workers for retry"
-				}
-			} else {
-				log.Printf("[Processor %d] Job exceeded max retries (%d), giving up", id, job.MaxRetries)
-				job.ReplyCh <- "Error: Job failed after maximum retries"
-			}
+			p.retryJob(&job, id, "Error: Job failed after maximum retries")
 		} else {
 			p.updateWorkerStats(job.WorkerURL, true)
 			job.ReplyCh <- result
@@ -197,6 +210,49 @@ func isError(result string) bool {
 }
 
 /*
+isWorkerBusy checks if a worker is currently busy and healthy by calling its /health endpoint
+Returns (busy, healthy) where:
+  - busy: true if the worker is currently processing a request
+  - healthy: true if the worker responded to the health check
+*/
+func (p *Pool) isWorkerBusy(workerURL string) (busy bool, healthy bool) {
+	resp, err := http.Get(fmt.Sprintf("%s/health", workerURL))
+	if err != nil {
+		log.Printf("Worker %s is unreachable: %v", workerURL, err)
+		return false, false // Unreachable
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("Worker %s returned unhealthy status: %d", workerURL, resp.StatusCode)
+		return false, false
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("Failed to read health response from %s: %v", workerURL, err)
+		return false, false
+	}
+
+	var healthResp struct {
+		Busy string `json:"busy"`
+	}
+
+	err = json.Unmarshal(body, &healthResp)
+	if err != nil {
+		log.Printf("Failed to parse health response from %s: %v", workerURL, err)
+		return false, false
+	}
+
+	isBusy := healthResp.Busy == "true"
+	if isBusy {
+		log.Printf("Worker %s is busy", workerURL)
+	}
+
+	return isBusy, true
+}
+
+/*
 SubmitJob adds a job to the worker pool queue
 */
 func (p *Pool) SubmitJob(job internal.WorkerJob) {
@@ -222,8 +278,6 @@ func (p *Pool) AddWorker(url string) {
 		JobsCompleted: 0,
 		JobsFailed:    0,
 		StartTime:     time.Now(),
-		CurrentJobs:   0,
-		MaxConcurrent: 1,
 	}
 
 	p.workerOrder = append(p.workerOrder, url)
@@ -231,20 +285,18 @@ func (p *Pool) AddWorker(url string) {
 }
 
 /*
-RemoveWorker removes a worker from the pool
+RemoveWorker removes a worker from the pool and clears them both from stats and worker maps.
 */
 func (p *Pool) RemoveWorker(url string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// Remove from stats map
 	if stats, exists := p.workerStats[url]; exists {
 		log.Printf("Removing worker: %s (completed: %d, failed: %d, uptime: %s)",
 			url, stats.JobsCompleted, stats.JobsFailed, time.Since(stats.StartTime).Round(time.Second))
 		delete(p.workerStats, url)
 	}
 
-	// Remove from worker map
 	for i, w := range p.workerOrder {
 		if w == url {
 			p.workerOrder = append(p.workerOrder[:i], p.workerOrder[i+1:]...)
@@ -263,37 +315,17 @@ func (p *Pool) GetWorker() string {
 	defer p.mu.Unlock()
 
 	if len(p.workerOrder) == 0 {
-		return "" // no workers
+		return "" //error - no workers
 	}
 
-	// Try each worker at most once (round-robin)
-	for i := 0; i < len(p.workerOrder); i++ {
-		// keep nextIdx in range
-		if p.nextIdx >= len(p.workerOrder) {
-			p.nextIdx = 0
-		}
-
-		url := p.workerOrder[p.nextIdx]
-		p.nextIdx = (p.nextIdx + 1) % len(p.workerOrder)
-
-		stats, exists := p.workerStats[url]
-		if !exists {
-			continue
-		}
-
-		maxConc := stats.MaxConcurrent
-		if maxConc <= 0 {
-			maxConc = 1
-		}
-
-		// only use workers that are not at capacity
-		if stats.CurrentJobs < maxConc {
-			return url
-		}
+	if p.nextIdx >= len(p.workerOrder) {
+		p.nextIdx = 0
 	}
 
-	// All workers are at capacity
-	return ""
+	worker := p.workerOrder[p.nextIdx]
+	p.nextIdx = (p.nextIdx + 1) % len(p.workerOrder)
+
+	return worker
 }
 
 /*
@@ -317,4 +349,11 @@ func (p *Pool) GetWorkerStats() map[string]internal.WorkerStats {
 		stats[url] = *workerStats
 	}
 	return stats
+}
+
+/*
+GetMaxRetries returns the configured maximum number of retries
+*/
+func (p *Pool) GetMaxRetries() int {
+	return p.maxRetries
 }

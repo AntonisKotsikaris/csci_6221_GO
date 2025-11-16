@@ -1,18 +1,21 @@
 package main
 
 import (
+	"gollama/internal/config"
 	"gollama/internal/pool"
 	"gollama/internal/server"
 	"log"
 )
 
 func main() {
-	//initialize and start the worker pool
-	p := pool.New(5000)
+	// setup config file (uses .env at root level)
+	cfg := config.LoadServerConfig()
+
+	p := pool.New(cfg.QueueSize, cfg.ConcurrentWorkers, cfg.MaxRetries)
 	p.Start()
 
-	//initialize and setup the server with the created worker pool
-	srv := server.New(p, 9000)
+	// Initialize
+	srv := server.New(p, cfg.Port, cfg.DefaultMaxTokens)
 	srv.Setup()
 
 	if err := srv.Start(); err != nil {
