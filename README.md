@@ -155,3 +155,12 @@ You can choose what port to host the worker on and what llama.cpp port it's conn
 ```
 go run cmd/worker/main.go -port 9001 -llama-port 8080
 ```
+
+## Future improvements:
+1. Chat history - enable chat history by saving messages
+2. Gollama db - maintain a gollama db which saves:
+   1. worker stats
+   2. user info, usage, chat history, projects, etc.
+   3. high level server metrics
+4. Detailed logs - export to graphana etc.
+5. UI!
