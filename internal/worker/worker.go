@@ -66,7 +66,7 @@ func handleHealth(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(http.StatusOK)
 	log.Printf("  GET /health - OK")
-	fmt.Fprintf(writer, `{"busy":"%s"}`, busyFlag)
+	fmt.Fprintf(writer, `{"busy":"%v"}`, busyFlag)
 }
 
 func handleConnectToServer(writer http.ResponseWriter, request *http.Request) {

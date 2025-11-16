@@ -33,13 +33,6 @@ func formatWorkerStats(stats map[string]internal.WorkerStats) map[string]interfa
 	for url, stat := range stats {
 		uptime := time.Since(stat.StartTime)
 
-		maxConc := stat.MaxConcurrent
-		if maxConc <= 0 {
-			maxConc = 1
-		}
-
-		busy := stat.CurrentJobs >= maxConc
-
 		formatted[url] = map[string]interface{}{
 			"jobs_completed": stat.JobsCompleted,
 			"jobs_failed":    stat.JobsFailed,
@@ -47,10 +40,6 @@ func formatWorkerStats(stats map[string]internal.WorkerStats) map[string]interfa
 			"uptime_pretty":  uptime.Round(time.Second).String(),
 			"start_time":     stat.StartTime.Format(time.RFC3339),
 			"score":          calculateWorkerScore(stat, uptime),
-
-			"current_jobs":   stat.CurrentJobs,
-			"max_concurrent": maxConc,
-			"busy":           busy,
 		}
 	}
 

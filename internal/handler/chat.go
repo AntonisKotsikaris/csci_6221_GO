@@ -4,14 +4,17 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"time"
 
 	"gollama/internal"
 	"gollama/internal/pool"
 )
 
 // HandleChat processes chat requests from clients
-func HandleChat(p *pool.Pool) http.HandlerFunc {
+func HandleChat(p *pool.Pool, defaultMaxTokens int) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		startTime := time.Now()
+
 		if r.Method != "POST" {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -35,7 +38,7 @@ func HandleChat(p *pool.Pool) http.HandlerFunc {
 			Messages: []internal.Message{
 				{Role: "user", Content: chatReq.Message},
 			},
-			MaxTokens: 100,
+			MaxTokens: defaultMaxTokens,
 		}
 
 		replyCh := make(chan string)
@@ -45,12 +48,15 @@ func HandleChat(p *pool.Pool) http.HandlerFunc {
 			ReplyCh:    replyCh,
 			WorkerURL:  p.GetWorker(),
 			RetryCount: 0,
-			MaxRetries: 3,
+			MaxRetries: p.GetMaxRetries(),
 		}
-		log.Printf("Worker job processed at URL: %s", job.WorkerURL)
+		log.Printf("Assigned job to worker: %s", job.WorkerURL)
 
 		p.SubmitJob(job)
 		reply := <-replyCh //must wait for reply from the job reply channel
+
+		elapsed := time.Since(startTime)
+		log.Printf("Request completed in %v", elapsed)
 
 		chatResp := internal.ChatResponse{Reply: reply}
 		w.Header().Set("Content-Type", "application/json")
