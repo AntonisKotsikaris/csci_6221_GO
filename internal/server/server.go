@@ -31,7 +31,6 @@ func New(p *pool.Pool, port int, defaultMaxTokens int) *Server {
 
 /*
 Setup configures all routes and starts the server
-TODO: Add other endpoints: NER, summarize, etc. endpoints
 */
 func (s *Server) Setup() {
 	// Register authentication endpoints
@@ -44,14 +43,21 @@ func (s *Server) Setup() {
 	// Register public handlers
 	http.HandleFunc("/health", handler.HandleHealth(s.pool))
 	http.HandleFunc("/stats", handler.HandleStats(s.pool))
+	http.HandleFunc("/summarize", handler.HandleSummarize(s.pool))
+	http.HandleFunc("/translate", handler.HandleTranslate(s.pool))
+	http.HandleFunc("/sentiment", handler.HandleSentiment(s.pool))
 
 	log.Printf("GoLlama server running on http://localhost:%d", s.port)
 	log.Println("Forwarding to llama.cpp workers")
-	log.Printf("  POST /auth/token - Get JWT token for worker")
-	log.Printf("  POST /connectWorker - Register a new worker (requires JWT)")
-	log.Printf("  POST /chat - Submit a chat message (requires JWT)")
+	log.Printf("  POST /chat - Submit a chat message")
+	log.Printf("  POST /summarize - Summarize text")
+	log.Printf("  POST /translate - Translate text to specified language")
+	log.Printf("  POST /sentiment - Analyze sentiment of text")
+	log.Printf("  POST /connectWorker - Register a new worker")
 	log.Printf("  GET  /health - Check server health")
 	log.Printf("  GET  /stats - View worker statistics")
+	log.Printf("  GET  /leaderboard - View worker performance leaderboard")
+	log.Printf("  POST /auth/token - Get JWT token for worker")
 }
 
 // Start begins listening for requests

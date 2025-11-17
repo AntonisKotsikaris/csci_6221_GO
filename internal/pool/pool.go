@@ -99,7 +99,7 @@ func (p *Pool) jobProcessor(id int) {
 
 		if !healthy {
 			log.Printf("[Processor %d] Worker %s is unhealthy, removing from pool", id, job.WorkerURL)
-			p.updateWorkerStats(job.WorkerURL, false)
+			p.updateWorkerStats(job.WorkerURL, false, 0)
 			p.RemoveWorker(job.WorkerURL)
 			p.retryJob(&job, id, "Error: Job failed after maximum retries")
 			return
@@ -113,7 +113,7 @@ func (p *Pool) jobProcessor(id int) {
 
 		// Worker is healthy and not busy - proceed with the call
 		callStart := time.Now()
-		result := p.callWorker(job.WorkerURL, job.Request)
+		result, latencyMS := p.callWorker(job.WorkerURL, job.Request)
 		callDuration := time.Since(callStart)
 
 		totalDuration := time.Since(jobStart)
@@ -123,11 +123,11 @@ func (p *Pool) jobProcessor(id int) {
 
 		if isError(result) {
 			log.Printf("[Processor %d] Worker %s failed, removing from pool", id, job.WorkerURL)
-			p.updateWorkerStats(job.WorkerURL, false)
+			p.updateWorkerStats(job.WorkerURL, false, 0)
 			p.RemoveWorker(job.WorkerURL)
 			p.retryJob(&job, id, "Error: Job failed after maximum retries")
 		} else {
-			p.updateWorkerStats(job.WorkerURL, true)
+			p.updateWorkerStats(job.WorkerURL, true, latencyMS)
 			job.ReplyCh <- result
 		}
 	}
@@ -135,11 +135,14 @@ func (p *Pool) jobProcessor(id int) {
 
 /*
 callWorker sends an inference request to a worker via its standardized /execute endpoint
+Returns the response text and the latency in milliseconds
 */
-func (p *Pool) callWorker(workerURL string, req internal.LlamaRequest) string {
+func (p *Pool) callWorker(workerURL string, req internal.LlamaRequest) (string, float64) {
+	startTime := time.Now()
+
 	jsonData, err := json.Marshal(req)
 	if err != nil {
-		return fmt.Sprintf("Error marshaling request: %v", err)
+		return fmt.Sprintf("Error marshaling request: %v", err), 0
 	}
 
 	/*
@@ -154,7 +157,7 @@ func (p *Pool) callWorker(workerURL string, req internal.LlamaRequest) string {
 
 	executePayload, err := json.Marshal(executeReq)
 	if err != nil {
-		return fmt.Sprintf("Error marshaling execute request: %v", err)
+		return fmt.Sprintf("Error marshaling execute request: %v", err), 0
 	}
 
 	resp, err := http.Post(
@@ -163,7 +166,7 @@ func (p *Pool) callWorker(workerURL string, req internal.LlamaRequest) string {
 		bytes.NewBuffer(executePayload),
 	)
 	if err != nil {
-		return fmt.Sprintf("Error contacting worker: %v", err)
+		return fmt.Sprintf("Error contacting worker: %v", err), 0
 	}
 	defer func(Body io.ReadCloser) {
 		err := Body.Close()
@@ -174,30 +177,31 @@ func (p *Pool) callWorker(workerURL string, req internal.LlamaRequest) string {
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Sprintf("Error reading response: %v", err)
+		return fmt.Sprintf("Error reading response: %v", err), 0
 	}
 
 	var workerResp internal.LlamaResponse
 	err = json.Unmarshal(body, &workerResp)
 	if err != nil {
-		return fmt.Sprintf("Error parsing response: %v", err)
+		return fmt.Sprintf("Error parsing response: %v", err), 0
 	}
 
 	if workerResp.Error != "" {
-		return fmt.Sprintf("Worker error: %s", workerResp.Error)
+		return fmt.Sprintf("Worker error: %s", workerResp.Error), 0
 	}
 
 	if len(workerResp.Choices) == 0 {
-		return "Worker error: no choices in response"
+		return "Worker error: no choices in response", 0
 	}
 
-	return workerResp.Choices[0].Message.Content
+	latencyMS := float64(time.Since(startTime).Microseconds()) / 1000.0
+	return workerResp.Choices[0].Message.Content, latencyMS
 }
 
 /*
 updateWorkerStats updates the statistics for a worker after job completion
 */
-func (p *Pool) updateWorkerStats(url string, success bool) {
+func (p *Pool) updateWorkerStats(url string, success bool, latencyMS float64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -208,10 +212,23 @@ func (p *Pool) updateWorkerStats(url string, success bool) {
 
 	if success {
 		stats.JobsCompleted++
-		log.Printf("Worker %s completed job (total: %d, failed: %d, uptime: %s)",
-			url, stats.JobsCompleted, stats.JobsFailed, time.Since(stats.StartTime).Round(time.Second))
+		stats.Requests++
+		stats.LastActive = time.Now()
+		stats.Healthy = true
+
+		// Update running average response time
+		if stats.AvgResponseMS == 0 {
+			stats.AvgResponseMS = latencyMS
+		} else {
+			// Calculate new average: (old_avg * old_count + new_value) / new_count
+			stats.AvgResponseMS = ((stats.AvgResponseMS * float64(stats.Requests-1)) + latencyMS) / float64(stats.Requests)
+		}
+
+		log.Printf("Worker %s completed job in %.2fms (avg: %.2fms, total: %d, failed: %d, uptime: %s)",
+			url, latencyMS, stats.AvgResponseMS, stats.JobsCompleted, stats.JobsFailed, time.Since(stats.StartTime).Round(time.Second))
 	} else {
 		stats.JobsFailed++
+		stats.Healthy = false
 		log.Printf("Worker %s failed job (total: %d, failed: %d, uptime: %s)",
 			url, stats.JobsCompleted, stats.JobsFailed, time.Since(stats.StartTime).Round(time.Second))
 	}
@@ -293,6 +310,9 @@ func (p *Pool) AddWorker(url string) {
 		JobsCompleted: 0,
 		JobsFailed:    0,
 		StartTime:     time.Now(),
+		AvgResponseMS: 0,
+		Requests:      0,
+		LastActive:    time.Now(),
 	}
 
 	p.workerOrder = append(p.workerOrder, url)
