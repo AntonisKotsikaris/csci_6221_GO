@@ -115,7 +115,7 @@ func handleConnectToServer(writer http.ResponseWriter, request *http.Request) {
 	}
 
 	tokenResp, err := http.Post(
-		"http://localhost:9000/auth/token",
+		"https://kyree-unlegislative-shelly.ngrok-free.dev/auth/token",
 		"application/json",
 		bytes.NewReader(tokenPayload),
 	)
@@ -157,7 +157,7 @@ func handleConnectToServer(writer http.ResponseWriter, request *http.Request) {
 	}
 
 	// Create request with authorization header
-	req, err := http.NewRequest("POST", "http://localhost:9000/connectWorker", bytes.NewReader(payload))
+	req, err := http.NewRequest("POST", "https://kyree-unlegislative-shelly.ngrok-free.dev/connectWorker", bytes.NewReader(payload))
 	if err != nil {
 		http.Error(writer, "Request creation failed", http.StatusInternalServerError)
 		return
