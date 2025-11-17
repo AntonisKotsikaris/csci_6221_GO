@@ -1,2 +1,6 @@
 .idea/
 CLAUDE.md
+
+DB/
+.vscode/
+tests/

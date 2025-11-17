@@ -12,6 +12,7 @@ import (
 var clientPort int
 var llamaPort int
 var busyFlag bool
+var cachedToken string // Store the JWT token for reuse
 
 /*
 Client manages the HTTP worker that connects to llama.cpp
@@ -70,6 +71,25 @@ func handleHealth(writer http.ResponseWriter, request *http.Request) {
 }
 
 func handleConnectToServer(writer http.ResponseWriter, request *http.Request) {
+	// Parse request body for credentials
+	var credentials struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+
+	err := json.NewDecoder(request.Body).Decode(&credentials)
+	if err != nil {
+		http.Error(writer, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Validate credentials are provided
+	if credentials.Username == "" || credentials.Password == "" {
+		http.Error(writer, "Username and password are required", http.StatusBadRequest)
+		return
+	}
+
+	// Check worker health
 	resp, err := http.Get(fmt.Sprintf("http://localhost:%d/health", clientPort))
 	if err != nil || resp.StatusCode != http.StatusOK {
 		http.Error(writer, "Cannot register: worker unhealthy", http.StatusServiceUnavailable)
@@ -77,26 +97,77 @@ func handleConnectToServer(writer http.ResponseWriter, request *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	// Prepare registration payload
+	// Step 1: Get JWT token from server
+	workerID := fmt.Sprintf("worker-%d", clientPort)
 	clientURL := fmt.Sprintf("http://localhost:%d", clientPort)
+
+	tokenReq := map[string]string{
+		"worker_id": workerID,
+		"url":       clientURL,
+		"username":  credentials.Username, // Use from request body
+		"password":  credentials.Password, // Use from request body
+	}
+
+	tokenPayload, err := json.Marshal(tokenReq)
+	if err != nil {
+		http.Error(writer, "Token request preparation failed", http.StatusInternalServerError)
+		return
+	}
+
+	tokenResp, err := http.Post(
+		"http://localhost:9000/auth/token",
+		"application/json",
+		bytes.NewReader(tokenPayload),
+	)
+	if err != nil {
+		http.Error(writer, "Cannot get token from server", http.StatusBadGateway)
+		return
+	}
+	defer tokenResp.Body.Close()
+
+	if tokenResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(tokenResp.Body)
+		log.Printf("Token request failed: %d - %s", tokenResp.StatusCode, string(body))
+		http.Error(writer, "Server rejected token request", http.StatusBadGateway)
+		return
+	}
+
+	var tokenData struct {
+		Token string `json:"token"`
+	}
+	err = json.NewDecoder(tokenResp.Body).Decode(&tokenData)
+	if err != nil {
+		http.Error(writer, "Invalid token response", http.StatusInternalServerError)
+		return
+	}
+
+	// Cache the token for reuse in chat requests
+	cachedToken = tokenData.Token
+
+	// Step 2: Register with server using JWT token
 	workerInfo := map[string]string{
 		"url":   clientURL,
 		"model": "test-model", // TODO: Make this based on the llama.cpp actual model
 	}
 
-	// prepare payload
 	payload, err := json.Marshal(workerInfo)
 	if err != nil {
 		http.Error(writer, "Registration failed", http.StatusInternalServerError)
 		return
 	}
 
-	// post to server
-	serverResp, err := http.Post(
-		"http://localhost:9000/connectWorker",
-		"application/json",
-		bytes.NewReader(payload),
-	)
+	// Create request with authorization header
+	req, err := http.NewRequest("POST", "http://localhost:9000/connectWorker", bytes.NewReader(payload))
+	if err != nil {
+		http.Error(writer, "Request creation failed", http.StatusInternalServerError)
+		return
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", tokenData.Token))
+
+	client := &http.Client{}
+	serverResp, err := client.Do(req)
 	if err != nil {
 		http.Error(writer, "Server unreachable", http.StatusBadGateway)
 		return
@@ -104,6 +175,8 @@ func handleConnectToServer(writer http.ResponseWriter, request *http.Request) {
 	defer serverResp.Body.Close()
 
 	if serverResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(serverResp.Body)
+		log.Printf("Registration rejected: %d - %s", serverResp.StatusCode, string(body))
 		http.Error(writer, "Server rejected registration", http.StatusBadGateway)
 		return
 	}
@@ -112,6 +185,7 @@ func handleConnectToServer(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(http.StatusOK)
 	io.Copy(writer, serverResp.Body)
+	log.Printf("Worker %s registered successfully with token", workerID)
 }
 
 func handleExecute(writer http.ResponseWriter, request *http.Request) {

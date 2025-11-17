@@ -23,7 +23,7 @@ func main() {
 			log.Fatalf("Worker server error: %v", err)
 		}
 	}()
-	autoConnect(port)
+	// autoConnect(port)
 	select {}
 }
 
