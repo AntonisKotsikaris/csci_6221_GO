@@ -13,6 +13,7 @@ var clientPort int
 var llamaPort int
 var busyFlag bool
 var cachedToken string // Store the JWT token for reuse
+var serverURL string   // Base URL for the GoLlama server
 
 /*
 Client manages the HTTP worker that connects to llama.cpp
@@ -36,8 +37,9 @@ func (c *Client) Start() error {
 	return http.ListenAndServe(fmt.Sprintf(":%d", c.port), nil)
 }
 
-func (c *Client) Setup(llamaPortArg int) {
-	llamaPort = llamaPortArg // Store in package variable
+func (c *Client) Setup(llamaPortArg int, serverURLArg string) {
+	llamaPort = llamaPortArg   // Store in package variable
+	serverURL = serverURLArg   // Store in package variable
 
 	// Register handlers
 	http.HandleFunc("/health", handleHealth)
@@ -46,6 +48,7 @@ func (c *Client) Setup(llamaPortArg int) {
 
 	log.Printf("GoLlama worker running on http://localhost:%d", c.port)
 	log.Printf("Connecting to llama.cpp on port %d", llamaPort)
+	log.Printf("Connecting to GoLlama server at %s", serverURL)
 	log.Printf("  GET /health - Check worker health")
 	log.Printf("  GET /connect - Connect to server")
 }
@@ -115,7 +118,7 @@ func handleConnectToServer(writer http.ResponseWriter, request *http.Request) {
 	}
 
 	tokenResp, err := http.Post(
-		"https://kyree-unlegislative-shelly.ngrok-free.dev/auth/token",
+		fmt.Sprintf("%s/auth/token", serverURL),
 		"application/json",
 		bytes.NewReader(tokenPayload),
 	)
@@ -157,7 +160,7 @@ func handleConnectToServer(writer http.ResponseWriter, request *http.Request) {
 	}
 
 	// Create request with authorization header
-	req, err := http.NewRequest("POST", "https://kyree-unlegislative-shelly.ngrok-free.dev/connectWorker", bytes.NewReader(payload))
+	req, err := http.NewRequest("POST", fmt.Sprintf("%s/connectWorker", serverURL), bytes.NewReader(payload))
 	if err != nil {
 		http.Error(writer, "Request creation failed", http.StatusInternalServerError)
 		return
