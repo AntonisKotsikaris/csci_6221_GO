@@ -33,9 +33,14 @@ func New(p *pool.Pool, port int, defaultMaxTokens int) *Server {
 Setup configures all routes and starts the server
 */
 func (s *Server) Setup() {
+	// Register authentication endpoints
+	http.HandleFunc("/auth/token", handler.HandleGetToken())
+
 	// Register handlers
 	http.HandleFunc("/connectWorker", handler.HandleConnectWorker(s.pool))
 	http.HandleFunc("/chat", handler.HandleChat(s.pool, s.defaultMaxTokens))
+
+	// Register public handlers
 	http.HandleFunc("/health", handler.HandleHealth(s.pool))
 	http.HandleFunc("/stats", handler.HandleStats(s.pool))
 	http.HandleFunc("/summarize", handler.HandleSummarize(s.pool))
@@ -51,6 +56,7 @@ func (s *Server) Setup() {
 	log.Printf("  POST /connectWorker - Register a new worker")
 	log.Printf("  GET  /health - Check server health")
 	log.Printf("  GET  /stats - View worker statistics")
+	log.Printf("  POST /auth/token - Get JWT token for worker")
 }
 
 // Start begins listening for requests
