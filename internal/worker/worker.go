@@ -192,6 +192,8 @@ func handleExecute(writer http.ResponseWriter, request *http.Request) {
 	//basically just pass the request from the server into llama.cpp. So we don't handle endpoint names etc.
 	//That's all done in the server. This should just pass the request from the server into llama.cpp using
 	//this worker as the middle-man.
+	//
+	//Applied the command OODP pattern here: execute handles ALL
 	var executeReq struct {
 		Endpoint string          `json:"endpoint"`
 		Body     json.RawMessage `json:"body"`

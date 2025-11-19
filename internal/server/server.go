@@ -56,7 +56,6 @@ func (s *Server) Setup() {
 	log.Printf("  POST /connectWorker - Register a new worker")
 	log.Printf("  GET  /health - Check server health")
 	log.Printf("  GET  /stats - View worker statistics")
-	log.Printf("  GET  /leaderboard - View worker performance leaderboard")
 	log.Printf("  POST /auth/token - Get JWT token for worker")
 }
 

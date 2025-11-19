@@ -89,43 +89,21 @@ func (p *Pool) jobProcessor(id int) {
 		jobStart := time.Now()
 		log.Printf("[Processor %d] Processing job with worker %s", id, job.WorkerURL)
 
-		healthCheckStart := time.Now()
-		busy, healthy := p.isWorkerBusy(job.WorkerURL)
-		healthCheckDuration := time.Since(healthCheckStart)
-
-		if healthCheckDuration > 100*time.Millisecond {
-			log.Printf("[Processor %d] Health check took %v (slow!)", id, healthCheckDuration)
-		}
-
-		if !healthy {
-			log.Printf("[Processor %d] Worker %s is unhealthy, removing from pool", id, job.WorkerURL)
-			p.updateWorkerStats(job.WorkerURL, false, 0)
-			p.RemoveWorker(job.WorkerURL)
-			p.retryJob(&job, id, "Error: Job failed after maximum retries")
-			return
-		}
-
-		if busy {
-			log.Printf("[Processor %d] Worker %s is busy, trying different worker", id, job.WorkerURL)
-			p.retryJob(&job, id, "Error: All workers busy or unavailable")
-			return
-		}
-
-		// Worker is healthy and not busy - proceed with the call
 		callStart := time.Now()
 		result, latencyMS := p.callWorker(job.WorkerURL, job.Request)
 		callDuration := time.Since(callStart)
 
 		totalDuration := time.Since(jobStart)
 		queueDepth := len(p.jobs)
-		log.Printf("[Processor %d] Job completed in %v (health check: %v, worker call: %v) - Queue depth: %d",
-			id, totalDuration, healthCheckDuration, callDuration, queueDepth)
+		log.Printf("[Processor %d] Job completed in %v (worker call: %v) - Queue depth: %d",
+			id, totalDuration, callDuration, queueDepth)
 
 		if isError(result) {
 			log.Printf("[Processor %d] Worker %s failed, removing from pool", id, job.WorkerURL)
 			p.updateWorkerStats(job.WorkerURL, false, 0)
 			p.RemoveWorker(job.WorkerURL)
 			p.retryJob(&job, id, "Error: Job failed after maximum retries")
+			continue // Move to next job after retry
 		} else {
 			p.updateWorkerStats(job.WorkerURL, true, latencyMS)
 			job.ReplyCh <- result
