@@ -144,11 +144,16 @@ Or use Insomnia/Postman:
   
 ## Testing
 Under the tests/ folder we have several test scripts to test the performance of the system.
-```
-go run tests/loadtest.go -requests 1000 -concurrency 50 -message "Stress test message"
+```bash
+go run tests/loadtest/loadtest.go -requests 1000 -concurrency 50 -message "Stress test message"
 ```
 
 Adjust requests and concurrency depending on scale of test you need.
+
+Can also run to test which randomly kills workers, simulating a real-world environment:
+```bash
+go run tests/chaostest.go
+```
 
 ## Worker config
 You can choose what port to host the worker on and what llama.cpp port it's connecting to with the flags `-port` and `llama-port`, respectively. By default, the Gollama server starts on port 9000, so workers begin at port 9001. For example:
