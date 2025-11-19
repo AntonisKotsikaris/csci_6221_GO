@@ -50,7 +50,7 @@ func HandleChat(p *pool.Pool, defaultMaxTokens int) http.HandlerFunc {
 			RetryCount: 0,
 			MaxRetries: p.GetMaxRetries(),
 		}
-		log.Printf("Assigned job to worker: %s", job.WorkerURL)
+		log.Printf("Job assigned to worker: %s", job.WorkerURL)
 
 		p.SubmitJob(job)
 		reply := <-replyCh //must wait for reply from the job reply channel
