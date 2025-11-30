@@ -53,7 +53,9 @@ cmake --build build --config Release
 ```
 
 **Note for Mac:** Metal GPU acceleration is enabled by default  
-**Note for Windows:** This builds CPU version. For GPU, see [llama.cpp docs](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md)
+**Note for Windows:** 
+- This builds CPU version. For GPU, see [llama.cpp docs](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md)
+- If you encounter a CURL error, use: `cmake -B build -DLLAMA_CURL=OFF` instead
 
 #### 3. Download a Model
 
